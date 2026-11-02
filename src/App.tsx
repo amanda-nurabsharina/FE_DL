@@ -2,16 +2,20 @@ import React, { useState, useEffect } from 'react'
 import {
   Activity,
   AlertCircle,
+  Bell,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
+  Database,
   DollarSign,
+  Download,
   MessageCircle,
   Package,
   Plus,
   RefreshCw,
   Search,
   ShieldCheck,
+  Smartphone,
   Stethoscope,
   TrendingUp,
   Users,
@@ -27,10 +31,14 @@ import {
 } from 'lucide-react'
 import {
   api,
+  type ActivityLogSummary,
+  type BackupInfoSummary,
   type Customer,
   type DashboardSummary,
   type DentureType,
   type Expense,
+  type ExpenseCategory,
+  type FinanceReportSummary,
   type InventoryBatch,
   type InventoryReportSummary,
   type Invoice,
@@ -61,6 +69,8 @@ export function App() {
   })
 
   const t = translations[lang]
+  const tr = (idText: string, enText: string) => (lang === 'en' ? enText : idText)
+  const dateLocale = lang === 'en' ? 'en-US' : 'id-ID'
 
   // Apply Theme to DOM
   useEffect(() => {
@@ -103,7 +113,21 @@ export function App() {
   const [usersList, setUsersList] = useState<User[]>([])
   const [rolesList, setRolesList] = useState<Role[]>([])
   const [systemSettings, setSystemSettings] = useState<Record<string, string>>({})
-  const [settingsSubTab, setSettingsSubTab] = useState<'users' | 'roles' | 'appearance'>('users')
+  const [settingsSubTab, setSettingsSubTab] = useState<'users' | 'roles' | 'security_logs' | 'backup' | 'appearance'>('users')
+
+  // Dashboard Analytics, Auto Alerts, Mobile Quick Update, Backup & Security Audit Log State
+  const [dashChartMode, setDashChartMode] = useState<'weekly' | 'monthly'>('weekly')
+  const [dashAlertFilter, setDashAlertFilter] = useState<'ALL' | 'LATE_PRODUCTION' | 'LOW_STOCK' | 'OVERDUE_INVOICE'>('ALL')
+  const [showNotifPanel, setShowNotifPanel] = useState(false)
+  const [showQuickMobileModal, setShowQuickMobileModal] = useState(false)
+  const [backupInfo, setBackupInfo] = useState<BackupInfoSummary | null>(null)
+  const [creatingBackup, setCreatingBackup] = useState(false)
+  const [restoringBackup, setRestoringBackup] = useState(false)
+  const [activitySummary, setActivitySummary] = useState<ActivityLogSummary | null>(null)
+  const [auditModuleFilter, setAuditModuleFilter] = useState('')
+  const [auditActionFilter, setAuditActionFilter] = useState('')
+  const [auditUserFilter, setAuditUserFilter] = useState('')
+  const [auditSearch, setAuditSearch] = useState('')
 
   // Logo Upload State
   const [logoFile, setLogoFile] = useState<File | null>(null)
@@ -306,11 +330,23 @@ export function App() {
   const [prEstPrice, setPrEstPrice] = useState(100000)
   const [prNotes, setPrNotes] = useState('')
 
-  // Invoice & Payment State
+  // Invoice, Finance & Sales State
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null)
+  const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null)
   const [paymentAmount, setPaymentAmount] = useState(0)
   const [paymentMethod, setPaymentMethod] = useState('BANK_TRANSFER')
   const [paymentType, setPaymentType] = useState('PARTIAL')
+  const [financeSummary, setFinanceSummary] = useState<FinanceReportSummary | null>(null)
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
+  const [finSubTab, setFinSubTab] = useState<'invoices' | 'sales_report' | 'expenses' | 'customers'>('invoices')
+  const [finInvoiceStatusFilter, setFinInvoiceStatusFilter] = useState('')
+  const [finInvoiceSearch, setFinInvoiceSearch] = useState('')
+  const [finExpenseCatFilter, setFinExpenseCatFilter] = useState(0)
+  const [showExpenseModal, setShowExpenseModal] = useState(false)
+  const [expCategoryId, setExpCategoryId] = useState(1)
+  const [expAmount, setExpAmount] = useState(250000)
+  const [expDate, setExpDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [expDesc, setExpDesc] = useState('')
 
   // Search
   const [orderSearch, setOrderSearch] = useState('')
@@ -373,7 +409,7 @@ export function App() {
   const loadInitialData = React.useCallback(async () => {
     try {
       setLoading(true)
-      const [meData, dashData, ordersData, custData, patsData, typesData, itemsData, prData, invData, expData, usersData, rolesData, settingsData, unitsData, supsData, batchesData, movesData, invReportData, attData] = await Promise.all([
+      const [meData, dashData, ordersData, custData, patsData, typesData, itemsData, prData, invData, expData, usersData, rolesData, settingsData, unitsData, supsData, batchesData, movesData, invReportData, attData, finSumData, expCatData, backupData, actLogData] = await Promise.all([
         api.getMe().catch(() => null),
         api.getDashboard().catch(() => null),
         api.getOrders().catch(() => []),
@@ -393,6 +429,10 @@ export function App() {
         api.getMovements().catch(() => []),
         api.getInventoryReport().catch(() => null),
         api.getAttendances().catch(() => []),
+        api.getFinanceSummary().catch(() => null),
+        api.getExpenseCategories().catch(() => []),
+        api.getBackupInfo().catch(() => null),
+        api.getActivityLogs().catch(() => null),
       ])
       if (meData) {
         api.setUser(meData)
@@ -416,6 +456,10 @@ export function App() {
       setStockMovements(movesData || [])
       if (invReportData) setInventoryReport(invReportData)
       setAttendances(attData || [])
+      if (finSumData) setFinanceSummary(finSumData)
+      setExpenseCategories(expCatData || [])
+      if (backupData) setBackupInfo(backupData)
+      if (actLogData) setActivitySummary(actLogData)
 
       // Initialize roleMenuMap
       if (rolesData) {
@@ -459,6 +503,62 @@ export function App() {
   const handleLogout = () => {
     api.clearToken()
     setCurrentUser(null)
+  }
+
+  // Multi-User Role Based Quick Switch
+  const handleQuickSwitchRole = async (username: string) => {
+    try {
+      setLoading(true)
+      const res = await api.login(username, 'admin12345')
+      setCurrentUser(res.user)
+    } catch (err: any) {
+      alert(err.message || `Gagal beralih ke akun ${username}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Backup Data Snapshot & Download JSON
+  const handleDownloadBackup = async (backupType = 'MANUAL_FULL_BACKUP', downloadFile = true) => {
+    try {
+      setCreatingBackup(true)
+      const res = await api.createBackupSnapshot(backupType, currentUser?.full_name || currentUser?.username || 'Admin')
+      if (downloadFile && res.snapshot) {
+        const blob = new Blob([JSON.stringify(res.snapshot, null, 2)], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = res.log?.backup_name || `dentallab_backup_${new Date().toISOString().split('T')[0]}.json`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      }
+      await loadInitialData()
+      if (!downloadFile) {
+        alert('Snapshot backup database berhasil diamankan ke server!')
+      }
+    } catch (err: any) {
+      alert(err.message || 'Gagal membuat backup data')
+    } finally {
+      setCreatingBackup(false)
+    }
+  }
+
+  // Restore / Verify Backup Data File
+  const handleRestoreBackupFile = async (file: File) => {
+    try {
+      setRestoringBackup(true)
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      await api.restoreBackupSnapshot(parsed)
+      alert('File backup berhasil diverifikasi dan disinkronkan ke database!')
+      await loadInitialData()
+    } catch (err: any) {
+      alert(err.message || 'File backup tidak valid atau gagal dipulihkan')
+    } finally {
+      setRestoringBackup(false)
+    }
   }
 
   // Helper: Select Doctor in New Order Form & apply Preferences + Loyalty Discount automatically
@@ -821,20 +921,65 @@ export function App() {
     }
   }
 
-  // Create Invoice from Order
+  // Create Invoice from Order (or open existing auto-generated invoice)
   const handleCreateInvoice = async (orderId: string) => {
-    if (!confirm(lang === 'id' ? 'Terbitkan invoice untuk pesanan ini?' : 'Issue invoice for this order?')) return
+    const existing = invoices.find((inv) => inv.production_order_id === orderId || inv.production_order?.id === orderId)
+    if (existing) {
+      setViewingInvoice(existing)
+      return
+    }
     try {
       setLoading(true)
-      await api.createInvoice({
+      const created = await api.createInvoice({
         production_order_id: orderId,
         discount_amount: 0,
-        notes: 'Tagihan pesanan gigi tiruan siap kirim',
+        notes: 'Invoice otomatis terintegrasi dari hasil produksi SPK & QC',
       })
-      alert(lang === 'id' ? 'Invoice berhasil diterbitkan!' : 'Invoice issued successfully!')
       await loadInitialData()
+      setViewingInvoice(created)
     } catch (err: any) {
       alert(err.message || 'Gagal membuat invoice')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Sync Invoices automatically from all COMPLETED / DELIVERED production orders
+  const handleSyncInvoices = async () => {
+    try {
+      setLoading(true)
+      const res = await api.syncInvoicesFromProduction()
+      await loadInitialData()
+      alert(res.message || `Sinkronisasi selesai (${res.synced_count} invoice baru diterbitkan dari data produksi).`)
+    } catch (err: any) {
+      alert(err.message || 'Gagal menyinkronkan invoice dari produksi')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Create Expense (Biaya Bahan, Tenaga Kerja, Operasional)
+  const handleCreateExpense = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (expAmount <= 0 || !expDesc.trim()) {
+      alert('Nominal dan keterangan biaya wajib diisi')
+      return
+    }
+    try {
+      setLoading(true)
+      await api.createExpense({
+        category_id: Number(expCategoryId),
+        amount: Number(expAmount),
+        expense_date: expDate ? new Date(expDate).toISOString() : new Date().toISOString(),
+        description: expDesc,
+      })
+      alert('Pengeluaran / biaya produksi berhasil dicatat!')
+      setShowExpenseModal(false)
+      setExpDesc('')
+      setExpAmount(250000)
+      await loadInitialData()
+    } catch (err: any) {
+      alert(err.message || 'Gagal mencatat pengeluaran')
     } finally {
       setLoading(false)
     }
@@ -1380,24 +1525,24 @@ export function App() {
 
           <form onSubmit={handleLogin}>
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>Username</label>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>{t.username}</label>
               <input
                 type="text"
                 value={loginUsername}
                 onChange={(e) => setLoginUsername(e.target.value)}
-                placeholder="Username akun lab"
+                placeholder={tr('Username akun lab', 'Lab account username')}
                 style={{ width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1.5px solid var(--border-light)', fontSize: '14px', outline: 'none', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                 required
               />
             </div>
 
             <div style={{ marginBottom: '24px' }}>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>Password</label>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>{t.password}</label>
               <input
                 type="password"
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="Password"
+                placeholder={t.password}
                 style={{ width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1.5px solid var(--border-light)', fontSize: '14px', outline: 'none', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                 required
               />
@@ -1408,20 +1553,20 @@ export function App() {
               disabled={loading}
               style={{ width: '100%', padding: '14px', borderRadius: '10px', background: 'var(--primary)', color: '#ffffff', fontWeight: 700, fontSize: '15px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', boxShadow: '0 4px 12px rgba(2, 132, 199, 0.3)' }}
             >
-              {loading ? <RefreshCw className="animate-spin" size={18} /> : 'Masuk ke Sistem'}
+              {loading ? <RefreshCw className="animate-spin" size={18} /> : t.loginButton}
             </button>
           </form>
 
           {/* Quick Demo Fill Buttons including Super Admin */}
           <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--border-light)' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Pilih Akun Demo Cepat:</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t.quickDemoLabel}</span>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
               {[
-                { label: '🛡️ Super Admin (Full Access)', u: 'superadmin' },
-                { label: '👑 Owner (Pemilik)', u: 'owner' },
-                { label: '🩺 Admin (Asisten Lab)', u: 'admin' },
-                { label: '🔬 Teknisi Gigi', u: 'teknisi1' },
-                { label: '💳 Kasir / Finance', u: 'kasir' },
+                { label: tr('🛡️ Super Admin (Full Access)', '🛡️ Super Admin (Full Access)'), u: 'superadmin' },
+                { label: tr('👑 Owner (Pemilik)', '👑 Owner (Lab Owner)'), u: 'owner' },
+                { label: tr('🩺 Admin (Asisten Lab)', '🩺 Admin (Lab Assistant)'), u: 'admin' },
+                { label: tr('🔬 Teknisi Gigi', '🔬 Dental Technician'), u: 'teknisi1' },
+                { label: tr('💳 Kasir / Finance', '💳 Cashier / Finance'), u: 'kasir' },
               ].map((acc) => (
                 <button
                   key={acc.u}
@@ -1479,7 +1624,170 @@ export function App() {
         </div>
 
         {/* Action Controls & User Badge */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
+          {/* Quick Mobile / Web Status Update Button */}
+          <button
+            type="button"
+            onClick={() => setShowQuickMobileModal(true)}
+            title={tr('Akses Cepat Web/Mobile: Update Status Produksi dari Mana Saja', 'Quick Web/Mobile Access: Update Production Status from Anywhere')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+              padding: '6px 10px',
+              borderRadius: '8px',
+              background: '#ecfdf5',
+              color: '#059669',
+              border: '1px solid #a7f3d0',
+              fontSize: '12px',
+              fontWeight: 700,
+            }}
+          >
+            <Smartphone size={15} />
+            <span className="hide-on-mobile">{tr('Status Cepat', 'Quick Status')}</span>
+          </button>
+
+          {/* Auto Notification Bell (Keterlambatan Produksi, Stok Menipis, Invoice Jatuh Tempo) */}
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setShowNotifPanel(!showNotifPanel)}
+              title={tr('Notifikasi Otomatis (Keterlambatan Produksi, Stok Menipis, Invoice Jatuh Tempo)', 'Auto Notifications (Production Delay, Low Stock, Overdue Invoice)')}
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                background: showNotifPanel ? 'var(--primary-subtle)' : 'var(--bg-surface)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-main)',
+                border: showNotifPanel ? '1.5px solid var(--primary)' : '1px solid var(--border-light)',
+                position: 'relative',
+              }}
+            >
+              <Bell size={16} />
+              {(dashboard?.auto_alerts?.length || 0) > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '-4px',
+                    right: '-4px',
+                    background: '#dc2626',
+                    color: '#ffffff',
+                    fontSize: '10px',
+                    fontWeight: 800,
+                    minWidth: '18px',
+                    height: '18px',
+                    borderRadius: '999px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '0 4px',
+                    border: '2px solid var(--bg-card)',
+                  }}
+                >
+                  {dashboard?.auto_alerts?.length}
+                </span>
+              )}
+            </button>
+
+            {/* Dropdown Panel Notifikasi Otomatis */}
+            {showNotifPanel && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '44px',
+                  right: 0,
+                  width: '360px',
+                  maxWidth: '90vw',
+                  maxHeight: '460px',
+                  overflowY: 'auto',
+                  background: 'var(--bg-card)',
+                  borderRadius: '14px',
+                  border: '1px solid var(--border-light)',
+                  boxShadow: '0 10px 30px rgba(0,0,0,0.18)',
+                  zIndex: 999,
+                  padding: '14px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', paddingBottom: '8px', borderBottom: '1px solid var(--border-light)' }}>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
+                      🔔 {tr('Notifikasi Peringatan Otomatis', 'Automatic Warning Notifications')}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      {tr('Keterlambatan Produksi, Stok Menipis & Invoice Jatuh Tempo', 'Production Delay, Low Stock & Overdue Invoices')}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowNotifPanel(false)}
+                    style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {(dashboard?.auto_alerts || []).length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    ✅ {tr('Seluruh produksi, stok bahan, dan tagihan dalam kondisi aman.', 'All production orders, material stock, and invoices are in good standing.')}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {(dashboard?.auto_alerts || []).map((al) => (
+                      <div
+                        key={al.id}
+                        onClick={() => {
+                          setShowNotifPanel(false)
+                          setActiveTab(al.target_tab as any)
+                        }}
+                        style={{
+                          cursor: 'pointer',
+                          padding: '10px 12px',
+                          borderRadius: '10px',
+                          background:
+                            al.category === 'LATE_PRODUCTION'
+                              ? '#fff7ed'
+                              : al.category === 'LOW_STOCK'
+                              ? '#fef2f2'
+                              : '#eff6ff',
+                          border:
+                            al.category === 'LATE_PRODUCTION'
+                              ? '1px solid #fed7aa'
+                              : al.category === 'LOW_STOCK'
+                              ? '1px solid #fecaca'
+                              : '1px solid #bfdbfe',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 800,
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              background: al.severity === 'CRITICAL' ? '#dc2626' : '#d97706',
+                              color: '#ffffff',
+                            }}
+                          >
+                            {al.category === 'LATE_PRODUCTION'
+                              ? tr('⏰ PRODUKSI', '⏰ PRODUCTION')
+                              : al.category === 'LOW_STOCK'
+                              ? tr('📦 STOK MENIPIS', '📦 LOW STOCK')
+                              : tr('🧾 INVOICE', '🧾 INVOICE')}
+                          </span>
+                          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--primary)' }}>{tr('Buka Modul →', 'Open Module →')}</span>
+                        </div>
+                        <div style={{ fontSize: '12px', fontWeight: 800, color: '#0f172a', marginTop: '3px' }}>{al.title}</div>
+                        <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px' }}>{al.description}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Night Mode Toggle */}
           <button
             onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
@@ -1520,7 +1828,7 @@ export function App() {
               setActiveTab('profile')
               setMobileMenuOpen(false)
             }}
-            title="Klik untuk melihat & edit Profil Saya"
+            title={tr('Klik untuk melihat & edit Profil Saya', 'Click to view & edit My Profile')}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1548,7 +1856,7 @@ export function App() {
               <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)', lineHeight: 1.2 }}>{currentUser.full_name}</div>
               <div style={{ fontSize: '10px', fontWeight: 700, color: isSuperAdmin ? '#10b981' : 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <span>{currentUser.role?.name || 'STAFF'}</span>
-                <span style={{ color: 'var(--text-subtle)' }}>• Profil</span>
+                <span style={{ color: 'var(--text-subtle)' }}>• {tr('Profil', 'Profile')}</span>
               </div>
             </div>
           </button>
@@ -1629,15 +1937,83 @@ export function App() {
 
         {/* Main Content Area */}
         <main className="app-content">
-          {/* TAB: DASHBOARD */}
+          {/* TAB: DASHBOARD & LAPORAN VISUALISASI DATA */}
           {activeTab === 'dashboard' && (
             <div className="animate-fade-in">
-              <div style={{ marginBottom: '24px' }}>
-                <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>{t.dashTitle}</h2>
-                <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{t.dashSubtitle}</p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    {tr('Dashboard & Laporan Visualisasi Operasional Lab', 'Lab Operations Dashboard & Visual Analytics Report')}
+                  </h2>
+                  <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
+                    {tr(
+                      'Grafik produksi mingguan/bulanan, top customer & top product, analisis biaya produksi vs pendapatan, serta notifikasi otomatis keterlambatan produksi, stok menipis & invoice jatuh tempo.',
+                      'Weekly/monthly production charts, top customers & top products, production cost vs revenue analysis, and automated alerts for late production, low stock & overdue invoices.'
+                    )}
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => setShowQuickMobileModal(true)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: '#ecfdf5',
+                      color: '#059669',
+                      border: '1.5px solid #059669',
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <Smartphone size={15} /> {tr('Update Status Cepat (Web/Mobile)', 'Quick Status Update (Web/Mobile)')}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveTab('settings')
+                      setSettingsSubTab('security_logs')
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: '#f5f3ff',
+                      color: '#6d28d9',
+                      border: '1.5px solid #6d28d9',
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <ShieldCheck size={15} /> {tr('Log Aktivitas Pengguna', 'User Activity Logs')} ({activitySummary?.total_logs || 0})
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveTab('settings')
+                      setSettingsSubTab('backup')
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'var(--bg-card)',
+                      color: 'var(--primary)',
+                      border: '1.5px solid var(--primary)',
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <Database size={15} /> {tr('Backup Data & Akses Multi-Role', 'Data Backup & Multi-Role Access')}
+                  </button>
+                </div>
               </div>
 
-              {/* KPI Cards */}
+              {/* 4 KPI Utama */}
               <div className="grid-stats">
                 <div style={{ background: 'var(--bg-card)', padding: '20px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -1647,7 +2023,9 @@ export function App() {
                     </div>
                   </div>
                   <div style={{ fontSize: '28px', fontWeight: 800, color: 'var(--text-main)' }}>{dashboard?.active_orders_count || 0}</div>
-                  <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 600 }}>{t.activeOrdersSub}</span>
+                  <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 600 }}>
+                    {tr('Selesai Bulan Ini', 'Completed This Month')}: {dashboard?.completed_this_month || 0} SPK
+                  </span>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '20px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
@@ -1658,7 +2036,9 @@ export function App() {
                     </div>
                   </div>
                   <div style={{ fontSize: '28px', fontWeight: 800, color: '#d97706' }}>{dashboard?.qc_pending_count || 0}</div>
-                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t.qcPendingSub}</span>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    {tr('Deadline / Terlambat', 'Deadline / Overdue')}: <strong style={{ color: '#dc2626' }}>{dashboard?.late_orders_count || 0} SPK</strong>
+                  </span>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '20px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
@@ -1669,7 +2049,9 @@ export function App() {
                     </div>
                   </div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#16a34a' }}>{formatRupiah(dashboard?.total_revenue_month || 0)}</div>
-                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t.operatingIncome}: {formatRupiah(dashboard?.net_operating_income || 0)}</span>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    {tr('Laba Bersih', 'Net Profit')}: <strong style={{ color: '#059669' }}>{formatRupiah(dashboard?.net_operating_income || 0)}</strong>
+                  </span>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '20px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
@@ -1680,7 +2062,564 @@ export function App() {
                     </div>
                   </div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#dc2626' }}>{formatRupiah(dashboard?.total_receivables || 0)}</div>
-                  <span style={{ fontSize: '12px', color: '#dc2626', fontWeight: 600 }}>{t.receivablesSub}</span>
+                  <span style={{ fontSize: '12px', color: '#dc2626', fontWeight: 600 }}>
+                    {dashboard?.overdue_invoices_count || 0} {tr('Invoice Belum Lunas', 'Unpaid Invoices')} • {dashboard?.low_stock_count || 0} {tr('Stok Menipis', 'Low Stock')}
+                  </span>
+                </div>
+              </div>
+
+              {/* BAGIAN 1: NOTIFIKASI OTOMATIS (KETERLAMBATAN PRODUKSI, STOK MENIPIS, INVOICE JATUH TEMPO) */}
+              <div
+                style={{
+                  background: 'var(--bg-card)',
+                  borderRadius: '16px',
+                  border: '1px solid var(--border-light)',
+                  padding: '20px',
+                  marginBottom: '24px',
+                  boxShadow: 'var(--shadow-sm)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      🔔 {tr('Pusat Notifikasi Otomatis (Early Warning System)', 'Automated Notification Center (Early Warning System)')}
+                      <span
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: '999px',
+                          fontSize: '11px',
+                          fontWeight: 800,
+                          background: '#fee2e2',
+                          color: '#dc2626',
+                        }}
+                      >
+                        {(dashboard?.auto_alerts || []).length} {tr('Peringatan Aktif', 'Active Alerts')}
+                      </span>
+                    </h3>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      {tr(
+                        'Deteksi otomatis keterlambatan produksi SPK, stok bahan menipis di bawah batas minimum, dan tagihan invoice jatuh tempo.',
+                        'Automatic detection of delayed SPK production orders, material stock below minimum threshold, and overdue invoices.'
+                      )}
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {[
+                      { key: 'ALL', label: `${tr('Semua', 'All')} (${(dashboard?.auto_alerts || []).length})` },
+                      {
+                        key: 'LATE_PRODUCTION',
+                        label: `⏰ ${tr('Keterlambatan Produksi', 'Production Delays')} (${(dashboard?.auto_alerts || []).filter((a) => a.category === 'LATE_PRODUCTION').length})`,
+                      },
+                      {
+                        key: 'LOW_STOCK',
+                        label: `📦 ${tr('Stok Menipis', 'Low Stock')} (${(dashboard?.auto_alerts || []).filter((a) => a.category === 'LOW_STOCK').length})`,
+                      },
+                      {
+                        key: 'OVERDUE_INVOICE',
+                        label: `🧾 ${tr('Invoice Jatuh Tempo', 'Overdue Invoices')} (${(dashboard?.auto_alerts || []).filter((a) => a.category === 'OVERDUE_INVOICE').length})`,
+                      },
+                    ].map((flt) => (
+                      <button
+                        key={flt.key}
+                        onClick={() => setDashAlertFilter(flt.key as any)}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          background: dashAlertFilter === flt.key ? 'var(--primary)' : 'var(--bg-surface)',
+                          color: dashAlertFilter === flt.key ? '#ffffff' : 'var(--text-muted)',
+                          border: dashAlertFilter === flt.key ? 'none' : '1px solid var(--border-light)',
+                        }}
+                      >
+                        {flt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {(() => {
+                  const alerts = (dashboard?.auto_alerts || []).filter((a) =>
+                    dashAlertFilter === 'ALL' ? true : a.category === dashAlertFilter
+                  )
+                  if (alerts.length === 0) {
+                    return (
+                      <div style={{ padding: '18px', borderRadius: '10px', background: '#ecfdf5', color: '#065f46', fontSize: '13px', fontWeight: 700 }}>
+                        ✓ {tr('Tidak ada peringatan pada kategori ini. Seluruh indikator operasional berjalan normal.', 'No warnings in this category. All operational indicators are running normally.')}
+                      </div>
+                    )
+                  }
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: '12px' }}>
+                      {alerts.map((al) => (
+                        <div
+                          key={al.id}
+                          style={{
+                            padding: '14px',
+                            borderRadius: '12px',
+                            background:
+                              al.category === 'LATE_PRODUCTION'
+                                ? '#fff7ed'
+                                : al.category === 'LOW_STOCK'
+                                ? '#fef2f2'
+                                : '#eff6ff',
+                            border:
+                              al.category === 'LATE_PRODUCTION'
+                                ? '1px solid #fed7aa'
+                                : al.category === 'LOW_STOCK'
+                                ? '1px solid #fecaca'
+                                : '1px solid #bfdbfe',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                          }}
+                        >
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                              <span
+                                style={{
+                                  fontSize: '10px',
+                                  fontWeight: 800,
+                                  padding: '3px 8px',
+                                  borderRadius: '999px',
+                                  background:
+                                    al.category === 'LATE_PRODUCTION'
+                                      ? '#ea580c'
+                                      : al.category === 'LOW_STOCK'
+                                      ? '#dc2626'
+                                      : '#2563eb',
+                                  color: '#ffffff',
+                                }}
+                              >
+                                {al.category === 'LATE_PRODUCTION'
+                                  ? tr('⏰ KETERLAMBATAN / DEADLINE PRODUKSI', '⏰ PRODUCTION DELAY / DEADLINE')
+                                  : al.category === 'LOW_STOCK'
+                                  ? tr('📦 STOK BAHAN MENIPIS', '📦 LOW MATERIAL STOCK')
+                                  : tr('🧾 INVOICE JATUH TEMPO / BELUM LUNAS', '🧾 OVERDUE / UNPAID INVOICE')}
+                              </span>
+                              <span style={{ fontSize: '11px', fontWeight: 800, color: '#0f172a' }}>{al.reference_code}</span>
+                            </div>
+                            <div style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a' }}>{al.title}</div>
+                            <div style={{ fontSize: '12px', color: '#334155', marginTop: '3px' }}>{al.description}</div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '4px' }}>
+                            <button
+                              onClick={() => {
+                                if (al.category === 'LATE_PRODUCTION') {
+                                  const ord = orders.find((o) => o.id === al.reference_id || o.order_number === al.reference_code)
+                                  if (ord) setSelectedOrder(ord)
+                                  setActiveTab('orders')
+                                } else if (al.category === 'LOW_STOCK') {
+                                  setActiveTab('inventory')
+                                } else {
+                                  setActiveTab('finance')
+                                  setFinSubTab('invoices')
+                                }
+                              }}
+                              style={{
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                background: '#0f172a',
+                                color: '#ffffff',
+                              }}
+                            >
+                              {al.category === 'LATE_PRODUCTION'
+                                ? tr('🔍 Pantau & Update SPK →', '🔍 Inspect & Update SPK →')
+                                : al.category === 'LOW_STOCK'
+                                ? tr('📦 Cek & Tambah Stok →', '📦 Check & Restock →')
+                                : tr('💳 Tagih / Catat Bayar →', '💳 Collect / Record Payment →')}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+              </div>
+
+              {/* BAGIAN 2: VISUALISASI DATA — GRAFIK PRODUKSI (MINGGUAN/BULANAN) & ANALISIS BIAYA VS PENDAPATAN */}
+              <div className="grid-2col" style={{ gap: '20px', marginBottom: '24px' }}>
+                {/* Grafik Produksi: Jumlah Order per Minggu / Bulan */}
+                <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        📈 {tr('Grafik Produksi (Jumlah Order)', 'Production Volume Chart (Orders)')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr('Visualisasi volume SPK masuk vs selesai QC per minggu & bulan.', 'Visualizing incoming SPK orders vs QC-completed orders weekly & monthly.')}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', background: 'var(--bg-surface)', padding: '4px', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                      <button
+                        onClick={() => setDashChartMode('weekly')}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          background: dashChartMode === 'weekly' ? 'var(--primary)' : 'transparent',
+                          color: dashChartMode === 'weekly' ? '#ffffff' : 'var(--text-muted)',
+                        }}
+                      >
+                        📅 {tr('Per Minggu', 'Weekly')}
+                      </button>
+                      <button
+                        onClick={() => setDashChartMode('monthly')}
+                        style={{
+                          padding: '5px 10px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          background: dashChartMode === 'monthly' ? 'var(--primary)' : 'transparent',
+                          color: dashChartMode === 'monthly' ? '#ffffff' : 'var(--text-muted)',
+                        }}
+                      >
+                        🗓️ {tr('Per Bulan', 'Monthly')}
+                      </button>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const chartData =
+                      dashChartMode === 'weekly'
+                        ? dashboard?.weekly_production || []
+                        : dashboard?.monthly_production || []
+                    const maxOrders = Math.max(...chartData.map((d) => d.total_orders), 4)
+
+                    return (
+                      <div>
+                        {/* Visual Bar Chart */}
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: `repeat(${Math.max(chartData.length, 1)}, 1fr)`,
+                            gap: '10px',
+                            alignItems: 'end',
+                            height: '180px',
+                            padding: '16px 10px 8px 10px',
+                            background: 'var(--bg-surface)',
+                            borderRadius: '12px',
+                            border: '1px solid var(--border-light)',
+                            marginBottom: '12px',
+                          }}
+                        >
+                          {chartData.map((item) => {
+                            const totalHeightPct = Math.max(Math.round((item.total_orders / maxOrders) * 100), item.total_orders > 0 ? 22 : 8)
+                            const compHeightPct = Math.max(Math.round((item.completed_orders / maxOrders) * 100), item.completed_orders > 0 ? 16 : 4)
+                            return (
+                              <div
+                                key={item.period}
+                                style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: 'center',
+                                  height: '100%',
+                                  justifyContent: 'flex-end',
+                                }}
+                              >
+                                <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
+                                  {item.total_orders} SPK
+                                </div>
+                                <div style={{ display: 'flex', gap: '4px', alignItems: 'flex-end', height: '115px', width: '100%', justifyContent: 'center' }}>
+                                  <div
+                                    title={`${tr('Total Order', 'Total Orders')}: ${item.total_orders} SPK`}
+                                    style={{
+                                      width: '18px',
+                                      height: `${totalHeightPct}%`,
+                                      background: 'linear-gradient(180deg, #0284c7 0%, #38bdf8 100%)',
+                                      borderRadius: '6px 6px 2px 2px',
+                                    }}
+                                  />
+                                  <div
+                                    title={`${tr('Selesai QC', 'Completed QC')}: ${item.completed_orders} SPK`}
+                                    style={{
+                                      width: '18px',
+                                      height: `${compHeightPct}%`,
+                                      background: 'linear-gradient(180deg, #059669 0%, #34d399 100%)',
+                                      borderRadius: '6px 6px 2px 2px',
+                                    }}
+                                  />
+                                </div>
+                                <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center', lineHeight: 1.2 }}>
+                                  {item.period}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+
+                        {/* Legend & Summary */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)', flexWrap: 'wrap', gap: '8px' }}>
+                          <div style={{ display: 'flex', gap: '14px' }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 700 }}>
+                              <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: '#0284c7', display: 'inline-block' }} />
+                              {tr('Total Order Masuk', 'Total Incoming Orders')}
+                            </span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 700 }}>
+                              <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: '#059669', display: 'inline-block' }} />
+                              {tr('Selesai Produksi & QC', 'Completed Production & QC')}
+                            </span>
+                          </div>
+                          <span style={{ fontWeight: 700, color: 'var(--primary)' }}>
+                            {tr('Total Volume', 'Total Volume')}: {orders.length} SPK ({formatRupiah(orders.reduce((s, o) => s + o.total_price, 0))})
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })()}
+                </div>
+
+                {/* Analisis Biaya Produksi dan Pendapatan */}
+                <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        💰 {tr('Analisis Biaya Produksi & Pendapatan', 'Production Cost & Revenue Analysis')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr(
+                          'Perbandingan Pendapatan (Omzet) terhadap Biaya Bahan, Tenaga Kerja, Operasional & Laba.',
+                          'Comparison of Revenue against Raw Materials, Labor, Operational Costs & Gross Profit.'
+                        )}
+                      </p>
+                    </div>
+                    <span
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '999px',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        background: '#dcfce7',
+                        color: '#15803d',
+                      }}
+                    >
+                      {tr('Margin Kotor', 'Gross Margin')}: {dashboard?.cost_vs_revenue?.profit_margin_pct ?? 48}%
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const cvr = dashboard?.cost_vs_revenue || {
+                      total_revenue: dashboard?.total_revenue_month || 1620000,
+                      paid_revenue: 0,
+                      material_cost: 850000,
+                      labor_cost: 650000,
+                      operational_cost: 320000,
+                      total_cost: 1820000,
+                      gross_profit: 120000,
+                      net_profit: -200000,
+                      profit_margin_pct: 7.4,
+                    }
+                    const baseMax = Math.max(cvr.total_revenue, cvr.total_cost, 1)
+                    const bars = [
+                      { label: tr('Pendapatan / Omzet Penjualan', 'Sales Revenue / Turnover'), val: cvr.total_revenue, color: '#0284c7', bg: '#e0f2fe' },
+                      { label: tr('Biaya Bahan Produksi (RAW_MATERIAL)', 'Production Material Cost (RAW_MATERIAL)'), val: cvr.material_cost, color: '#ea580c', bg: '#ffedd5' },
+                      { label: tr('Biaya Tenaga Kerja (LABOR)', 'Technician Labor Cost (LABOR)'), val: cvr.labor_cost, color: '#d97706', bg: '#fef3c7' },
+                      { label: tr('Biaya Operasional (OPERATIONAL)', 'Operational Cost (OPERATIONAL)'), val: cvr.operational_cost, color: '#7c3aed', bg: '#f3e8ff' },
+                      { label: tr('Laba Kotor (Gross Profit)', 'Gross Profit'), val: Math.max(cvr.gross_profit, 0), color: '#059669', bg: '#dcfce7' },
+                    ]
+
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {bars.map((b) => {
+                          const pct = Math.min(Math.max(Math.round((b.val / baseMax) * 100), 6), 100)
+                          return (
+                            <div key={b.label}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                                <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{b.label}</span>
+                                <span style={{ fontWeight: 800, color: b.color }}>{formatRupiah(b.val)}</span>
+                              </div>
+                              <div style={{ width: '100%', height: '10px', borderRadius: '999px', background: 'var(--bg-surface)', overflow: 'hidden' }}>
+                                <div style={{ width: `${pct}%`, height: '100%', borderRadius: '999px', background: b.color }} />
+                              </div>
+                            </div>
+                          )
+                        })}
+
+                        <div
+                          style={{
+                            marginTop: '6px',
+                            padding: '10px 12px',
+                            borderRadius: '10px',
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border-light)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '12px',
+                          }}
+                        >
+                          <span>
+                            {tr('Total Biaya Produksi & Ops', 'Total Production & Ops Cost')}: <strong style={{ color: '#dc2626' }}>{formatRupiah(cvr.total_cost)}</strong>
+                          </span>
+                          <button
+                            onClick={() => {
+                              setActiveTab('finance')
+                              setFinSubTab('sales_report')
+                            }}
+                            style={{ fontSize: '11px', fontWeight: 800, color: 'var(--primary)', background: 'transparent' }}
+                          >
+                            {tr('Buka Laporan Keuangan Lengkap →', 'Open Full Financial Report →')}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })()}
+                </div>
+              </div>
+
+              {/* BAGIAN 3: TOP CUSTOMER (DOKTER/KLINIK) & TOP PRODUCT (JENIS GIGI TIRUAN) */}
+              <div className="grid-2col" style={{ gap: '20px', marginBottom: '24px' }}>
+                {/* Top Customer */}
+                <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        🏆 {tr('Top Customer (Dokter / Klinik)', 'Top Customers (Doctors / Clinics)')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr('Pelanggan dengan frekuensi order & kontribusi omzet tertinggi.', 'Customers with the highest order frequency & revenue contribution.')}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('customers')}
+                      style={{ fontSize: '12px', fontWeight: 700, color: 'var(--primary)', background: 'transparent' }}
+                    >
+                      {tr('Semua Dokter →', 'All Doctors →')}
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {(dashboard?.top_customers || []).map((tc, idx) => (
+                      <div
+                        key={tc.customer_id}
+                        style={{
+                          padding: '12px',
+                          borderRadius: '12px',
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--border-light)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '10px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div
+                            style={{
+                              width: '30px',
+                              height: '30px',
+                              borderRadius: '8px',
+                              background: idx === 0 ? '#fef3c7' : 'var(--primary-light)',
+                              color: idx === 0 ? '#d97706' : 'var(--primary)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 800,
+                              fontSize: '13px',
+                            }}
+                          >
+                            #{idx + 1}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>{tc.doctor_name}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                              {tc.clinic_name || tr('Klinik Mitra', 'Partner Clinic')} •{' '}
+                              <span style={{ color: '#7c3aed', fontWeight: 700 }}>{tc.loyalty_tier || 'GOLD'}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--primary)' }}>
+                            {tc.total_orders} {tr('Order SPK', 'SPK Orders')}
+                          </div>
+                          <div style={{ fontSize: '11px', fontWeight: 700, color: '#059669' }}>
+                            {formatRupiah(tc.total_revenue)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Top Product */}
+                <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        🦷 {tr('Top Product (Jenis Gigi Tiruan Terlaris)', 'Top Products (Best-Selling Prosthetics)')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr('Distribusi jenis restorasi gigi palsu paling banyak dipesan.', 'Distribution of the most frequently ordered dental restorations.')}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('orders')}
+                      style={{ fontSize: '12px', fontWeight: 700, color: 'var(--primary)', background: 'transparent' }}
+                    >
+                      {tr('Lihat SPK →', 'View SPK →')}
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {(dashboard?.top_products || []).map((tp, idx) => (
+                      <div
+                        key={tp.denture_type_id || idx}
+                        style={{
+                          padding: '12px',
+                          borderRadius: '12px',
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--border-light)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <div>
+                            <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
+                              #{idx + 1} {tp.product_name}
+                            </span>
+                            {tp.category && (
+                              <span
+                                style={{
+                                  marginLeft: '6px',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  background: 'var(--primary-light)',
+                                  color: 'var(--primary)',
+                                }}
+                              >
+                                {tp.category}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--primary)' }}>
+                              {tp.total_orders} SPK ({tp.percentage}%)
+                            </span>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#059669', marginLeft: '8px' }}>
+                              {formatRupiah(tp.total_revenue)}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ width: '100%', height: '8px', borderRadius: '999px', background: 'var(--border-light)', overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              width: `${Math.max(tp.percentage, 12)}%`,
+                              height: '100%',
+                              borderRadius: '999px',
+                              background: 'linear-gradient(90deg, #0284c7 0%, #0d9488 100%)',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1712,7 +2651,7 @@ export function App() {
                           <td style={{ padding: '12px', fontWeight: 700, color: 'var(--primary)' }}>{o.order_number}</td>
                           <td style={{ padding: '12px', fontWeight: 600, color: 'var(--text-main)' }}>
                             {o.patient_name}
-                            <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>Warna: {o.shade_guide}</span>
+                            <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>{tr('Warna', 'Shade')}: {o.shade_guide}</span>
                           </td>
                           <td style={{ padding: '12px' }}>
                             <div style={{ fontWeight: 600 }}>{o.customer?.name}</div>
@@ -1725,7 +2664,7 @@ export function App() {
                             </span>
                           </td>
                           <td style={{ padding: '12px', color: 'var(--text-muted)' }}>
-                            {new Date(o.promised_due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
+                            {new Date(o.promised_due_date).toLocaleDateString(dateLocale, { day: 'numeric', month: 'short' })}
                           </td>
                           <td style={{ padding: '12px' }}>
                             <button
@@ -1735,7 +2674,7 @@ export function App() {
                               }}
                               style={{ background: 'var(--primary-light)', color: 'var(--primary)', padding: '6px 12px', borderRadius: '6px', fontWeight: 600, fontSize: '12px' }}
                             >
-                              Detail
+                              {t.detail}
                             </button>
                           </td>
                         </tr>
@@ -1747,12 +2686,19 @@ export function App() {
             </div>
           )}
 
-          {/* TAB: SETTINGS (Super Admin & Owner Setup Segment) */}
+          {/* TAB: SETTINGS (Super Admin & Owner Setup Segment + Akses Online & Backup Data) */}
           {activeTab === 'settings' && (
             <div className="animate-fade-in">
               <div style={{ marginBottom: '20px' }}>
-                <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>{t.settingsTitle}</h2>
-                <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{t.settingsSubtitle}</p>
+                <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>
+                  {tr('Pengaturan Sistem, Akses Multi-User & Backup Data', 'System Settings, Multi-User Access & Data Backup')}
+                </h2>
+                <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
+                  {tr(
+                    'Kelola login multi-user berbasis role (Owner, Admin, Teknisi, Kasir), akses cepat web/mobile, serta backup & restore data agar tidak hilang.',
+                    'Manage role-based multi-user login (Owner, Admin, Technician, Cashier), quick web/mobile access, and database backup & restore.'
+                  )}
+                </p>
               </div>
 
               {/* Sub-tabs Navigation */}
@@ -1760,6 +2706,8 @@ export function App() {
                 {[
                   { id: 'users', label: t.tabUsers, icon: Users },
                   { id: 'roles', label: t.tabRoles, icon: ShieldCheck },
+                  { id: 'security_logs', label: `🛡️ ${tr('Modul Keamanan & Log Aktivitas', 'Security & Activity Audit Logs')} (${activitySummary?.total_logs || 0})`, icon: Activity },
+                  { id: 'backup', label: `☁️ ${tr('Akses Online & Backup Data', 'Online Access & Data Backup')}`, icon: Database },
                   { id: 'appearance', label: t.tabAppearance, icon: Upload },
                 ].map((st) => {
                   const Icon = st.icon
@@ -1794,7 +2742,9 @@ export function App() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
                     <div>
                       <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>{t.tabUsers}</h3>
-                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Kelola data akun pengguna, role, dan hak login sistem.</p>
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                        {tr('Kelola data akun pengguna, role, dan hak login sistem.', 'Manage user accounts, roles, and system login privileges.')}
+                      </p>
                     </div>
                     <button
                       onClick={() => setShowAddUserModal(true)}
@@ -1810,11 +2760,11 @@ export function App() {
                         <thead>
                           <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
                             <th style={{ padding: '12px' }}>Username</th>
-                            <th style={{ padding: '12px' }}>Nama Lengkap</th>
+                            <th style={{ padding: '12px' }}>{tr('Nama Lengkap', 'Full Name')}</th>
                             <th style={{ padding: '12px' }}>Email</th>
                             <th style={{ padding: '12px' }}>Role</th>
                             <th style={{ padding: '12px' }}>Status</th>
-                            <th style={{ padding: '12px' }}>Aksi</th>
+                            <th style={{ padding: '12px' }}>{t.colActions}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1839,14 +2789,14 @@ export function App() {
                                     onClick={() => handleToggleUserActive(u)}
                                     style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, background: 'var(--bg-surface)', border: '1px solid var(--border-light)', color: 'var(--text-main)' }}
                                   >
-                                    {u.is_active ? 'Nonaktifkan' : 'Aktifkan'}
+                                    {u.is_active ? tr('Nonaktifkan', 'Deactivate') : tr('Aktifkan', 'Activate')}
                                   </button>
                                   {u.username !== 'owner' && u.username !== 'superadmin' && (
                                     <button
                                       onClick={() => handleDeleteUser(u.id)}
                                       style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, background: '#fee2e2', color: '#dc2626' }}
                                     >
-                                      Hapus
+                                      {t.delete}
                                     </button>
                                   )}
                                 </div>
@@ -1866,7 +2816,7 @@ export function App() {
                   <div style={{ marginBottom: '16px' }}>
                     <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>{t.tabRoles}</h3>
                     <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                      {lang === 'en' ? 'Manage menus accessible by each user role.' : 'Atur menu yang dapat diakses oleh masing-masing role pengguna.'}
+                      {tr('Atur menu yang dapat diakses oleh masing-masing role pengguna.', 'Manage menus accessible by each user role.')}
                     </p>
                   </div>
 
@@ -1925,6 +2875,712 @@ export function App() {
                         </div>
                       )
                     })}
+                  </div>
+                </div>
+              )}
+
+              {/* SETTINGS SUB-TAB: MODUL KEAMANAN & LOG AKTIVITAS PENGGUNA (SIAPA YANG MENAMBAH/MENGUBAH DATA) */}
+              {settingsSubTab === 'security_logs' && (
+                <div className="animate-fade-in">
+                  {/* 4 Kartu KPI Audit Keamanan */}
+                  <div className="grid-kpi" style={{ marginBottom: '20px' }}>
+                    <div
+                      onClick={() => setAuditActionFilter('')}
+                      style={{ cursor: 'pointer', background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}
+                    >
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 700 }}>
+                        🛡️ {tr('Total Log Aktivitas Tercatat', 'Total Recorded Activity Logs')}
+                      </div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--primary)', marginTop: '4px' }}>
+                        {activitySummary?.total_logs || 0} {tr('Aktivitas', 'Activities')}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {tr('Pengguna aktif hari ini', 'Active users today')}: <strong>{activitySummary?.active_users_today || 1} {tr('Akun', 'Accounts')}</strong>
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={() => setAuditActionFilter(auditActionFilter === 'CREATE' ? '' : 'CREATE')}
+                      style={{
+                        cursor: 'pointer',
+                        background: 'var(--bg-card)',
+                        padding: '18px',
+                        borderRadius: '14px',
+                        border: auditActionFilter === 'CREATE' ? '2px solid #059669' : '1px solid var(--border-light)',
+                        boxShadow: 'var(--shadow-sm)',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px', color: '#059669', fontWeight: 700 }}>
+                        ➕ {tr('Menambah Data Baru (CREATE)', 'Create New Data (CREATE)')}
+                      </div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: '#059669', marginTop: '4px' }}>
+                        {activitySummary?.create_count || 0} {tr('Aksi', 'Actions')}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {tr('Input SPK, Dokter/Pasien, Stok Masuk, Invoice & Biaya', 'SPK Intake, Doctor/Patient, Stock In, Invoice & Expenses')}
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={() => setAuditActionFilter(auditActionFilter === 'UPDATE' ? '' : 'UPDATE')}
+                      style={{
+                        cursor: 'pointer',
+                        background: 'var(--bg-card)',
+                        padding: '18px',
+                        borderRadius: '14px',
+                        border: auditActionFilter === 'UPDATE' ? '2px solid #d97706' : '1px solid var(--border-light)',
+                        boxShadow: 'var(--shadow-sm)',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px', color: '#d97706', fontWeight: 700 }}>
+                        ✏️ {tr('Mengubah Data & Status (UPDATE)', 'Update Data & Status (UPDATE)')}
+                      </div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: '#d97706', marginTop: '4px' }}>
+                        {activitySummary?.update_count || 0} {tr('Aksi', 'Actions')}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {tr('Update tahapan SPK, QC, PIC Teknis, Profil & Hak Role', 'Update SPK stages, QC, Technician PIC, Profile & Role Permissions')}
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={() => setAuditActionFilter(auditActionFilter === 'LOGIN' ? '' : 'LOGIN')}
+                      style={{
+                        cursor: 'pointer',
+                        background: 'var(--bg-card)',
+                        padding: '18px',
+                        borderRadius: '14px',
+                        border: auditActionFilter === 'LOGIN' ? '2px solid #6d28d9' : '1px solid var(--border-light)',
+                        boxShadow: 'var(--shadow-sm)',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px', color: '#6d28d9', fontWeight: 700 }}>
+                        🔐 {tr('Sesi Login, Backup & Hapus Data', 'Login Sessions, Backup & Deletions')}
+                      </div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: '#6d28d9', marginTop: '4px' }}>
+                        {(activitySummary?.login_count || 0) + (activitySummary?.delete_count || 0)} {tr('Aksi', 'Actions')}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {tr('Login Multi-Role, Backup Database & Penghapusan Data', 'Multi-Role Logins, Database Backups & Data Deletions')}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tabel & Filter Audit Trail */}
+                  <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                          🛡️ {tr('Log Aktivitas Pengguna (Audit Trail: Siapa yang Menambah / Mengubah Data)', 'User Activity Audit Trail (Who Added / Modified Data)')}
+                        </h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          {tr(
+                            'Setiap penambahan, perubahan, maupun penghapusan data di seluruh modul tercatat otomatis beserta nama pengguna, jabatan (role), waktu, dan rincian perubahannya.',
+                            'Every creation, modification, or deletion across all modules is automatically logged with user identity, role, timestamp, and payload details.'
+                          )}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => loadInitialData()}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '8px 14px',
+                          borderRadius: '8px',
+                          background: 'var(--bg-surface)',
+                          color: 'var(--primary)',
+                          border: '1px solid var(--primary)',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        <RefreshCw size={14} /> {tr('Refresh Log Aktivitas', 'Refresh Activity Logs')}
+                      </button>
+                    </div>
+
+                    {/* Filter Bar */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+                      <input
+                        type="text"
+                        placeholder={tr('Cari nama user, SPK, Invoice, atau perubahan...', 'Search user, SPK, Invoice, or changes...')}
+                        value={auditSearch}
+                        onChange={(e) => setAuditSearch(e.target.value)}
+                        style={{
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-light)',
+                          fontSize: '12px',
+                          background: 'var(--bg-card)',
+                          color: 'var(--text-main)',
+                        }}
+                      />
+
+                      <select
+                        value={auditActionFilter}
+                        onChange={(e) => setAuditActionFilter(e.target.value)}
+                        style={{
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-light)',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          background: 'var(--bg-card)',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        <option value="">{tr('Semua Jenis Aksi', 'All Action Types')}</option>
+                        <option value="CREATE">➕ {tr('Menambah Data (CREATE)', 'Create Data (CREATE)')}</option>
+                        <option value="UPDATE">✏️ {tr('Mengubah Data (UPDATE)', 'Update Data (UPDATE)')}</option>
+                        <option value="DELETE">🗑️ {tr('Menghapus Data (DELETE)', 'Delete Data (DELETE)')}</option>
+                        <option value="LOGIN">🔐 {tr('Login Sesi Pengguna', 'User Session Login')}</option>
+                        <option value="BACKUP">💾 {tr('Backup & Restore Data', 'Data Backup & Restore')}</option>
+                      </select>
+
+                      <select
+                        value={auditModuleFilter}
+                        onChange={(e) => setAuditModuleFilter(e.target.value)}
+                        style={{
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-light)',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          background: 'var(--bg-card)',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        <option value="">{tr('Semua Modul Sistem', 'All System Modules')}</option>
+                        <option value="PRODUKSI_SPK">🦷 {tr('Produksi & QC (SPK)', 'Production & QC (SPK)')}</option>
+                        <option value="DOKTER_PASIEN">🏥 {tr('Master Dokter & Pasien', 'Master Doctors & Patients')}</option>
+                        <option value="STOK_BAHAN">📦 {tr('Stok & Bahan', 'Stock & Materials')}</option>
+                        <option value="KEUANGAN_INVOICE">💰 {tr('Keuangan & Invoice', 'Finance & Invoices')}</option>
+                        <option value="SDM_ABSENSI">👥 {tr('SDM, Tugas & Absensi', 'HR, Tasks & Attendance')}</option>
+                        <option value="KEAMANAN_SISTEM">⚙️ {tr('Keamanan & Pengaturan', 'Security & Settings')}</option>
+                      </select>
+
+                      <select
+                        value={auditUserFilter}
+                        onChange={(e) => setAuditUserFilter(e.target.value)}
+                        style={{
+                          padding: '9px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-light)',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          background: 'var(--bg-card)',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        <option value="">{tr('Semua Pengguna (Siapa)', 'All Users (Actor)')}</option>
+                        {usersList.map((u) => (
+                          <option key={u.id} value={u.username}>
+                            {u.full_name} (@{u.username} - {u.role?.name})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="table-responsive">
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '12px' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                            <th style={{ padding: '12px' }}>{tr('Waktu Kejadian', 'Timestamp')}</th>
+                            <th style={{ padding: '12px' }}>{tr('Pengguna / Pelaku (Siapa)', 'User / Actor (Who)')}</th>
+                            <th style={{ padding: '12px' }}>{tr('Tipe Aktivitas', 'Activity Type')}</th>
+                            <th style={{ padding: '12px' }}>{tr('Modul & Entitas Data', 'Module & Target Entity')}</th>
+                            <th style={{ padding: '12px' }}>{tr('Rincian Data yang Ditambah / Diubah', 'Details of Added / Modified Data')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(activitySummary?.logs || [])
+                            .filter((lg) => {
+                              if (auditActionFilter && lg.action_type !== auditActionFilter) return false
+                              if (auditModuleFilter && lg.module_name !== auditModuleFilter) return false
+                              if (auditUserFilter && lg.username !== auditUserFilter) return false
+                              if (!auditSearch.trim()) return true
+                              const q = auditSearch.toLowerCase()
+                              return (
+                                lg.description.toLowerCase().includes(q) ||
+                                lg.full_name.toLowerCase().includes(q) ||
+                                lg.username.toLowerCase().includes(q) ||
+                                lg.target_entity.toLowerCase().includes(q) ||
+                                (lg.changed_data || '').toLowerCase().includes(q)
+                              )
+                            })
+                            .map((lg) => (
+                              <tr key={lg.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                <td style={{ padding: '12px', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                                  <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                                    {new Date(lg.created_at).toLocaleDateString(dateLocale, {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      year: 'numeric',
+                                    })}
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    {tr('Pukul', 'At')} {new Date(lg.created_at).toLocaleTimeString(dateLocale)}
+                                  </div>
+                                  <div style={{ fontSize: '10px', color: 'var(--text-subtle)', marginTop: '2px' }}>
+                                    IP: {lg.ip_address || '127.0.0.1'}
+                                  </div>
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <div style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '13px' }}>
+                                    {lg.full_name || lg.username}
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>@{lg.username}</div>
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      marginTop: '4px',
+                                      padding: '2px 7px',
+                                      borderRadius: '6px',
+                                      fontSize: '10px',
+                                      fontWeight: 800,
+                                      background:
+                                        lg.role_name === 'SUPER_ADMIN'
+                                          ? '#dcfce7'
+                                          : lg.role_name === 'OWNER'
+                                          ? '#fef3c7'
+                                          : '#e0f2fe',
+                                      color:
+                                        lg.role_name === 'SUPER_ADMIN'
+                                          ? '#15803d'
+                                          : lg.role_name === 'OWNER'
+                                          ? '#b45309'
+                                          : '#0369a1',
+                                    }}
+                                  >
+                                    {lg.role_name || 'STAFF'}
+                                  </span>
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      padding: '4px 10px',
+                                      borderRadius: '999px',
+                                      fontSize: '11px',
+                                      fontWeight: 800,
+                                      background:
+                                        lg.action_type === 'CREATE'
+                                          ? '#dcfce7'
+                                          : lg.action_type === 'UPDATE'
+                                          ? '#fef3c7'
+                                          : lg.action_type === 'DELETE'
+                                          ? '#fee2e2'
+                                          : '#f3e8ff',
+                                      color:
+                                        lg.action_type === 'CREATE'
+                                          ? '#15803d'
+                                          : lg.action_type === 'UPDATE'
+                                          ? '#b45309'
+                                          : lg.action_type === 'DELETE'
+                                          ? '#dc2626'
+                                          : '#6d28d9',
+                                    }}
+                                  >
+                                    {lg.action_type === 'CREATE'
+                                      ? tr('➕ MENAMBAH DATA', '➕ CREATED DATA')
+                                      : lg.action_type === 'UPDATE'
+                                      ? tr('✏️ MENGUBAH DATA', '✏️ UPDATED DATA')
+                                      : lg.action_type === 'DELETE'
+                                      ? tr('🗑️ MENGHAPUS DATA', '🗑️ DELETED DATA')
+                                      : lg.action_type === 'BACKUP'
+                                      ? tr('💾 BACKUP DATA', '💾 DATA BACKUP')
+                                      : tr('🔐 LOGIN SISTEM', '🔐 SYSTEM LOGIN')}
+                                  </span>
+                                  <div style={{ fontSize: '10px', color: 'var(--text-subtle)', marginTop: '4px', fontFamily: 'monospace' }}>
+                                    {lg.http_method} {lg.endpoint}
+                                  </div>
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      padding: '2px 7px',
+                                      borderRadius: '4px',
+                                      fontSize: '10px',
+                                      fontWeight: 800,
+                                      background: 'var(--bg-surface)',
+                                      color: 'var(--primary)',
+                                      border: '1px solid var(--border-light)',
+                                    }}
+                                  >
+                                    {lg.module_name}
+                                  </span>
+                                  <div style={{ fontWeight: 700, color: 'var(--text-main)', marginTop: '4px' }}>
+                                    {lg.target_entity}
+                                  </div>
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top', maxWidth: '380px' }}>
+                                  <div style={{ fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>
+                                    {lg.description}
+                                  </div>
+                                  {lg.changed_data && lg.changed_data !== '' && (
+                                    <div
+                                      style={{
+                                        padding: '6px 8px',
+                                        borderRadius: '6px',
+                                        background: 'var(--bg-surface)',
+                                        border: '1px solid var(--border-light)',
+                                        fontSize: '10px',
+                                        fontFamily: 'monospace',
+                                        color: 'var(--text-muted)',
+                                        wordBreak: 'break-all',
+                                      }}
+                                    >
+                                      {lg.changed_data}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SETTINGS SUB-TAB: AKSES ONLINE, MULTI-USER ROLE & BACKUP DATA */}
+              {settingsSubTab === 'backup' && (
+                <div className="animate-fade-in">
+                  {/* Row 1: Login Multi-User Role Based & Akses Cepat Web/Mobile */}
+                  <div className="grid-2col" style={{ gap: '20px', marginBottom: '20px' }}>
+                    {/* Card 1: Login Multi-User Role Based */}
+                    <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                          🔐 {tr('Login Multi-User (Role-Based Access)', 'Multi-User Login (Role-Based Access)')}
+                        </h3>
+                        <span
+                          style={{
+                            padding: '3px 9px',
+                            borderRadius: '999px',
+                            fontSize: '11px',
+                            fontWeight: 800,
+                            background: '#dcfce7',
+                            color: '#15803d',
+                          }}
+                        >
+                          {tr('Aktif', 'Active')}: {currentUser.role?.name}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+                        {tr(
+                          'Sistem mendukung multi-user sesuai jabatan (Owner, Admin, Teknisi, Kasir, Super Admin). Klik akun di bawah untuk beralih sesi login secara langsung:',
+                          'The system supports role-based multi-user access (Owner, Admin, Technician, Cashier, Super Admin). Click any account below to switch sessions instantly:'
+                        )}
+                      </p>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))', gap: '8px' }}>
+                        {[
+                          { role: 'SUPER_ADMIN', username: 'superadmin', label: '🛡️ Super Admin', desc: tr('Akses penuh seluruh modul & sistem', 'Full access to all modules & settings') },
+                          { role: 'OWNER', username: 'owner', label: '👑 Owner Lab', desc: tr('Approval PR, Keuangan, Laporan & QC', 'PR Approvals, Finance, Reports & QC') },
+                          { role: 'ADMIN', username: 'admin', label: '🩺 Admin / CRM', desc: tr('Input SPK, Dokter/Pasien, Jadwal', 'SPK Intake, Doctors/Patients, Schedule') },
+                          { role: 'TECHNICIAN', username: 'teknisi1', label: tr('🔬 Teknisi 1 (Zirconia)', '🔬 Technician 1 (Zirconia)'), desc: tr('Update tahapan produksi, QC & SDM', 'Update production stages, QC & HR') },
+                          { role: 'TECHNICIAN', username: 'teknisi2', label: tr('🔬 Teknisi 2 (Akrilik)', '🔬 Technician 2 (Acrylic)'), desc: tr('Update tahapan produksi & absensi', 'Update production stages & attendance') },
+                          { role: 'CASHIER', username: 'kasir', label: tr('💳 Kasir / Finance', '💳 Cashier / Finance'), desc: tr('Invoice pembayaran, kas & piutang', 'Payment invoices, cashflow & receivables') },
+                        ].map((acc) => {
+                          const isCurrent = currentUser.username === acc.username
+                          return (
+                            <div
+                              key={acc.username}
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: '10px',
+                                background: isCurrent ? 'var(--primary-subtle)' : 'var(--bg-surface)',
+                                border: isCurrent ? '1.5px solid var(--primary)' : '1px solid var(--border-light)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'space-between',
+                                gap: '6px',
+                              }}
+                            >
+                              <div>
+                                <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-main)' }}>{acc.label}</div>
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                  User: <code>{acc.username}</code> • {acc.desc}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={isCurrent || loading}
+                                onClick={() => handleQuickSwitchRole(acc.username)}
+                                style={{
+                                  padding: '5px 10px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  background: isCurrent ? '#16a34a' : 'var(--primary)',
+                                  color: '#ffffff',
+                                  opacity: isCurrent ? 0.85 : 1,
+                                }}
+                              >
+                                {isCurrent ? tr('✓ Sedang Login', '✓ Logged In') : `${tr('Login sebagai', 'Login as')} ${acc.username} →`}
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Card 2: Akses Online via Web / Mobile */}
+                    <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                            📱 {tr('Akses Online via Web / Mobile', 'Online Access via Web / Mobile')}
+                          </h3>
+                          <span
+                            style={{
+                              padding: '3px 9px',
+                              borderRadius: '999px',
+                              fontSize: '11px',
+                              fontWeight: 800,
+                              background: '#e0f2fe',
+                              color: '#0369a1',
+                            }}
+                          >
+                            Responsive Web & Mobile Ready
+                          </span>
+                        </div>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+                          {tr(
+                            'Memudahkan teknisi, admin, maupun kurir melakukan update status produksi SPK (`Dalam Proses`, `Menunggu QC`, `Selesai`, `Dikirim`) dari smartphone atau browser di mana saja.',
+                            'Allows technicians, admins, and couriers to quickly update SPK production statuses (`In Progress`, `QC Pending`, `Completed`, `Delivered`) from any smartphone or browser.'
+                          )}
+                        </p>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
+                          <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{tr('Status Server API', 'API Server Status')}</div>
+                            <div style={{ fontSize: '13px', fontWeight: 800, color: '#059669', marginTop: '2px' }}>
+                              ● {backupInfo?.database_status || 'ONLINE & PROTECTED'}
+                            </div>
+                          </div>
+                          <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)' }}>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{tr('Auto-Backup Terakhir', 'Last Auto-Backup')}</div>
+                            <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--primary)', marginTop: '2px' }}>
+                              {backupInfo?.last_backup_at || tr('Hari Ini', 'Today')}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => setShowQuickMobileModal(true)}
+                          style={{
+                            flex: 1,
+                            padding: '10px 14px',
+                            borderRadius: '10px',
+                            background: '#059669',
+                            color: '#ffffff',
+                            fontSize: '13px',
+                            fontWeight: 800,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <Smartphone size={16} /> {tr('Buka Mode Update Status Mobile / Web', 'Open Mobile / Web Quick Status Mode')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Backup & Restore Data Database (Agar Data Tidak Hilang) */}
+                  <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                          💾 {tr('Backup & Restore Data Sistem (Agar Data Tidak Hilang)', 'System Data Backup & Restore (Data Loss Prevention)')}
+                        </h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          {tr(
+                            'Cadangkan seluruh database (Dokter, Pasien, SPK Produksi, QC, Stok Bahan, Batch, Invoice, Pembayaran, Pengeluaran, SDM & Pengaturan) ke dalam file snapshot JSON atau pulihkan kapan saja.',
+                            'Back up the entire database (Doctors, Patients, SPK Orders, QC, Material Stock, Batches, Invoices, Payments, Expenses, HR & Settings) into a JSON snapshot or restore anytime.'
+                          )}
+                        </p>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          disabled={creatingBackup}
+                          onClick={() => handleDownloadBackup('MANUAL_FULL_BACKUP', true)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '9px 16px',
+                            borderRadius: '8px',
+                            background: 'var(--primary)',
+                            color: '#ffffff',
+                            fontSize: '12px',
+                            fontWeight: 800,
+                          }}
+                        >
+                          <Download size={15} /> {creatingBackup ? tr('Membuat Backup...', 'Creating Backup...') : tr('Download Full Backup (.JSON)', 'Download Full Backup (.JSON)')}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={creatingBackup}
+                          onClick={() => handleDownloadBackup('CLOUD_SNAPSHOT', false)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '9px 14px',
+                            borderRadius: '8px',
+                            background: 'var(--bg-surface)',
+                            color: 'var(--primary)',
+                            border: '1.5px solid var(--primary)',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          <Database size={15} /> {tr('Simpan Snapshot Server', 'Save Server Snapshot')}
+                        </button>
+
+                        <label
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '9px 14px',
+                            borderRadius: '8px',
+                            background: '#ecfdf5',
+                            color: '#059669',
+                            border: '1px solid #a7f3d0',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <Upload size={15} /> {restoringBackup ? tr('Memulihkan...', 'Restoring...') : tr('Restore dari File Backup', 'Restore from Backup File')}
+                          <input
+                            type="file"
+                            accept=".json,application/json"
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                              if (e.target.files && e.target.files[0]) {
+                                handleRestoreBackupFile(e.target.files[0])
+                                e.target.value = ''
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Ringkasan Jumlah Record per Modul yang Diamankan */}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                        gap: '10px',
+                        marginBottom: '18px',
+                      }}
+                    >
+                      {[
+                        { label: tr('SPK Produksi', 'SPK Orders'), count: backupInfo?.table_counts?.['production_orders'] ?? orders.length },
+                        { label: tr('Dokter / Klinik', 'Doctors / Clinics'), count: backupInfo?.table_counts?.['customers'] ?? customers.length },
+                        { label: tr('Master Pasien', 'Master Patients'), count: backupInfo?.table_counts?.['patients'] ?? patients.length },
+                        { label: tr('Stok Bahan & Batch', 'Stock & Batches'), count: (backupInfo?.table_counts?.['items'] ?? inventoryItems.length) + (backupInfo?.table_counts?.['inventory_batches'] ?? 0) },
+                        { label: tr('Invoice & Pembayaran', 'Invoices & Payments'), count: (backupInfo?.table_counts?.['invoices'] ?? invoices.length) + (backupInfo?.table_counts?.['payments'] ?? 0) },
+                        { label: tr('Pengeluaran & PR', 'Expenses & PRs'), count: (backupInfo?.table_counts?.['expenses'] ?? expenses.length) + (backupInfo?.table_counts?.['purchase_requests'] ?? 0) },
+                        { label: tr('SDM, User & Absensi', 'HR, Users & Attendance'), count: (backupInfo?.table_counts?.['users'] ?? usersList.length) + (backupInfo?.table_counts?.['staff_attendances'] ?? 0) },
+                      ].map((stat) => (
+                        <div
+                          key={stat.label}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: '10px',
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border-light)',
+                          }}
+                        >
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{stat.label}</div>
+                          <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginTop: '2px' }}>
+                            {stat.count} {tr('Data', 'Records')}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Tabel Riwayat Backup Data */}
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px' }}>
+                      📋 {tr('Riwayat Backup Data Otomatis & Manual:', 'Automated & Manual Backup History:')}
+                    </div>
+                    <div className="table-responsive">
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '12px' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                            <th style={{ padding: '10px' }}>{tr('Nama File Snapshot', 'Snapshot File Name')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Tipe Backup', 'Backup Type')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Total Record', 'Total Records')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Ukuran', 'Size')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Dibuat Oleh', 'Created By')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Waktu Backup', 'Backup Time')}</th>
+                            <th style={{ padding: '10px' }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(backupInfo?.backup_history || []).map((b) => (
+                            <tr key={b.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                              <td style={{ padding: '10px', fontWeight: 700, color: 'var(--primary)' }}>{b.backup_name}</td>
+                              <td style={{ padding: '10px' }}>
+                                <span
+                                  style={{
+                                    padding: '3px 8px',
+                                    borderRadius: '999px',
+                                    fontSize: '10px',
+                                    fontWeight: 800,
+                                    background: b.backup_type.includes('AUTO') ? '#e0f2fe' : '#f3e8ff',
+                                    color: b.backup_type.includes('AUTO') ? '#0369a1' : '#6d28d9',
+                                  }}
+                                >
+                                  {b.backup_type}
+                                </span>
+                              </td>
+                              <td style={{ padding: '10px', fontWeight: 700, color: 'var(--text-main)' }}>{b.total_records} {tr('baris', 'rows')}</td>
+                              <td style={{ padding: '10px', color: 'var(--text-muted)' }}>{b.size_kb} KB</td>
+                              <td style={{ padding: '10px', color: 'var(--text-main)' }}>{b.created_by}</td>
+                              <td style={{ padding: '10px', color: 'var(--text-muted)' }}>
+                                {new Date(b.created_at).toLocaleString(dateLocale)}
+                              </td>
+                              <td style={{ padding: '10px' }}>
+                                <span
+                                  style={{
+                                    padding: '3px 8px',
+                                    borderRadius: '999px',
+                                    fontSize: '10px',
+                                    fontWeight: 800,
+                                    background: '#dcfce7',
+                                    color: '#15803d',
+                                  }}
+                                >
+                                  ✓ {b.status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2032,7 +3688,10 @@ export function App() {
                 <div>
                   <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>{t.ordersTitle}</h2>
                   <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
-                    Pantau alur pembuatan gigi palsu (Model Gips → Design → Wax-up → Casting → Finishing → QC), PIC Teknis tiap tahap, status produksi, dan dokumentasi foto hasil akhir.
+                    {tr(
+                      'Pantau alur pembuatan gigi palsu (Model Gips → Design → Wax-up → Casting → Finishing → QC), PIC Teknis tiap tahap, status produksi, dan dokumentasi foto hasil akhir.',
+                      'Track prosthetic production stages (Gypsum Model → Design → Wax-up → Casting → Finishing → QC), Technician PIC per stage, production status, and final QC photo documentation.'
+                    )}
                   </p>
                 </div>
                 {allowedMenus.includes('new_order') && (
@@ -2048,12 +3707,12 @@ export function App() {
               {/* Status Pipeline Quick Filter Pills */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px', marginBottom: '16px' }}>
                 {[
-                  { key: '', label: 'Semua SPK', count: orders.length, color: 'var(--primary)' },
-                  { key: 'INTAKE', label: '📥 Order Masuk', count: orders.filter((o) => o.status === 'INTAKE').length, color: '#6366f1' },
-                  { key: 'IN_PRODUCTION', label: '⚙️ Dalam Proses', count: orders.filter((o) => o.status === 'IN_PRODUCTION' || o.status === 'REOPENED_FOR_REWORK').length, color: '#0284c7' },
-                  { key: 'QC_PENDING', label: '🔍 Menunggu QC', count: orders.filter((o) => o.status === 'QC_PENDING').length, color: '#d97706' },
-                  { key: 'COMPLETED', label: '✅ Selesai (Siap Kirim)', count: orders.filter((o) => o.status === 'COMPLETED').length, color: '#059669' },
-                  { key: 'DELIVERED', label: '🚚 Dikirim ke Dokter', count: orders.filter((o) => o.status === 'DELIVERED').length, color: '#0d9488' },
+                  { key: '', label: tr('Semua SPK', 'All SPK Orders'), count: orders.length, color: 'var(--primary)' },
+                  { key: 'INTAKE', label: tr('📥 Order Masuk', '📥 Order Intake'), count: orders.filter((o) => o.status === 'INTAKE').length, color: '#6366f1' },
+                  { key: 'IN_PRODUCTION', label: tr('⚙️ Dalam Proses', '⚙️ In Production'), count: orders.filter((o) => o.status === 'IN_PRODUCTION' || o.status === 'REOPENED_FOR_REWORK').length, color: '#0284c7' },
+                  { key: 'QC_PENDING', label: tr('🔍 Menunggu QC', '🔍 QC Pending'), count: orders.filter((o) => o.status === 'QC_PENDING').length, color: '#d97706' },
+                  { key: 'COMPLETED', label: tr('✅ Selesai (Siap Kirim)', '✅ Completed (Ready)'), count: orders.filter((o) => o.status === 'COMPLETED').length, color: '#059669' },
+                  { key: 'DELIVERED', label: tr('🚚 Dikirim ke Dokter', '🚚 Delivered to Doctor'), count: orders.filter((o) => o.status === 'DELIVERED').length, color: '#0d9488' },
                 ].map((st) => (
                   <button
                     key={st.key}
@@ -2081,7 +3740,7 @@ export function App() {
                   <Search size={18} color="var(--text-subtle)" style={{ position: 'absolute', left: '12px', top: '12px' }} />
                   <input
                     type="text"
-                    placeholder="Cari No. SPK, nama pasien, atau nama dokter..."
+                    placeholder={tr('Cari No. SPK, nama pasien, atau nama dokter...', 'Search SPK No., patient name, or doctor name...')}
                     value={orderSearch}
                     onChange={(e) => setOrderSearch(e.target.value)}
                     style={{ width: '100%', padding: '10px 14px 10px 40px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-card)', color: 'var(--text-main)', fontSize: '14px' }}
@@ -2093,12 +3752,12 @@ export function App() {
                   style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-card)', color: 'var(--text-main)', fontSize: '14px', fontWeight: 600 }}
                 >
                   <option value="">{t.allStatus}</option>
-                  <option value="INTAKE">Order Masuk (Intake)</option>
-                  <option value="IN_PRODUCTION">Dalam Proses Produksi</option>
-                  <option value="QC_PENDING">Menunggu QC</option>
-                  <option value="REOPENED_FOR_REWORK">Revisi / Rework</option>
-                  <option value="COMPLETED">Selesai (Siap Kirim)</option>
-                  <option value="DELIVERED">Dikirim ke Dokter</option>
+                  <option value="INTAKE">{tr('Order Masuk (Intake)', 'Order Intake')}</option>
+                  <option value="IN_PRODUCTION">{tr('Dalam Proses Produksi', 'In Production')}</option>
+                  <option value="QC_PENDING">{tr('Menunggu QC', 'QC Pending')}</option>
+                  <option value="REOPENED_FOR_REWORK">{tr('Revisi / Rework', 'Reopened for Rework')}</option>
+                  <option value="COMPLETED">{tr('Selesai (Siap Kirim)', 'Completed (Ready)')}</option>
+                  <option value="DELIVERED">{tr('Dikirim ke Dokter', 'Delivered to Doctor')}</option>
                 </select>
               </div>
 
@@ -2110,10 +3769,10 @@ export function App() {
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
                           <th style={{ padding: '10px 8px' }}>{t.colSpk}</th>
-                          <th style={{ padding: '10px 8px' }}>Pasien & Jenis Gigi</th>
-                          <th style={{ padding: '10px 8px' }}>Dokter & Jadwal</th>
-                          <th style={{ padding: '10px 8px' }}>PIC Teknis</th>
-                          <th style={{ padding: '10px 8px' }}>Tahap & Status Produksi</th>
+                          <th style={{ padding: '10px 8px' }}>{tr('Pasien & Jenis Gigi', 'Patient & Prosthetic Type')}</th>
+                          <th style={{ padding: '10px 8px' }}>{tr('Dokter & Jadwal', 'Doctor & Schedule')}</th>
+                          <th style={{ padding: '10px 8px' }}>{tr('PIC Teknis', 'Technician PIC')}</th>
+                          <th style={{ padding: '10px 8px' }}>{tr('Tahap & Status Produksi', 'Stage & Production Status')}</th>
                           <th style={{ padding: '10px 8px' }}>{t.colActions}</th>
                         </tr>
                       </thead>
@@ -2131,12 +3790,12 @@ export function App() {
                             const totalStages = o.stage_runs?.length || 0
                             const doneStages = o.stage_runs?.filter((s) => s.status === 'COMPLETED').length || 0
                             const statusLabelMap: Record<string, string> = {
-                              INTAKE: 'Order Masuk',
-                              IN_PRODUCTION: 'Dalam Proses',
-                              QC_PENDING: 'Menunggu QC',
-                              REOPENED_FOR_REWORK: 'Revisi / Rework',
-                              COMPLETED: 'Selesai',
-                              DELIVERED: 'Dikirim',
+                              INTAKE: tr('Order Masuk', 'Intake'),
+                              IN_PRODUCTION: tr('Dalam Proses', 'In Production'),
+                              QC_PENDING: tr('Menunggu QC', 'QC Pending'),
+                              REOPENED_FOR_REWORK: tr('Revisi / Rework', 'Rework'),
+                              COMPLETED: tr('Selesai', 'Completed'),
+                              DELIVERED: tr('Dikirim', 'Delivered'),
                             }
                             return (
                               <tr
@@ -2163,18 +3822,18 @@ export function App() {
                                 <td style={{ padding: '12px 8px' }}>
                                   <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{o.patient_name}</div>
                                   <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600 }}>{o.denture_type?.name}</div>
-                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Gigi: {o.teeth_numbers} ({o.shade_guide})</div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{tr('Gigi', 'Teeth')}: {o.teeth_numbers} ({o.shade_guide})</div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
                                   <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{o.customer?.name}</div>
                                   <div style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>{o.customer?.clinic_name}</div>
                                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                    Masuk: {new Date(o.received_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })} → Target: <strong>{new Date(o.promised_due_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}</strong>
+                                    {tr('Masuk', 'In')}: {new Date(o.received_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short' })} → {tr('Target', 'Due')}: <strong>{new Date(o.promised_due_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short' })}</strong>
                                   </div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
                                   <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
-                                    👨‍🔬 {o.current_technician?.full_name || 'Belum Ditentukan'}
+                                    👨‍🔬 {o.current_technician?.full_name || tr('Belum Ditentukan', 'Unassigned')}
                                   </div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
@@ -2242,10 +3901,10 @@ export function App() {
                           )}
                         </div>
                         <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                          Dokter: <strong style={{ color: 'var(--text-main)' }}>{selectedOrder.customer?.name}</strong> ({selectedOrder.customer?.clinic_name})
+                          {tr('Dokter', 'Doctor')}: <strong style={{ color: 'var(--text-main)' }}>{selectedOrder.customer?.name}</strong> ({selectedOrder.customer?.clinic_name})
                         </p>
                         <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          Pasien: <strong style={{ color: 'var(--text-main)' }}>{selectedOrder.patient_name}</strong> | Warna: <strong>{selectedOrder.shade_guide}</strong>
+                          {tr('Pasien', 'Patient')}: <strong style={{ color: 'var(--text-main)' }}>{selectedOrder.patient_name}</strong> | {tr('Warna', 'Shade')}: <strong>{selectedOrder.shade_guide}</strong>
                         </p>
                       </div>
 
@@ -2261,7 +3920,7 @@ export function App() {
                               selectedOrder.order_number,
                               selectedOrder.status === 'COMPLETED' || selectedOrder.status === 'DELIVERED'
                                 ? formatRupiah(selectedOrder.total_price)
-                                : new Date(selectedOrder.promised_due_date).toLocaleDateString('id-ID')
+                                : new Date(selectedOrder.promised_due_date).toLocaleDateString(dateLocale)
                             )
                             openWhatsApp(selectedOrder.customer.phone, msg)
                           }}
@@ -2275,7 +3934,7 @@ export function App() {
                           type="button"
                           onClick={() => setSelectedOrder(null)}
                           style={{ padding: '8px 12px', background: 'var(--bg-surface)', color: 'var(--text-muted)', borderRadius: '8px', fontSize: '13px', fontWeight: 700, border: '1px solid var(--border-light)' }}
-                          title="Tutup Panel"
+                          title={tr('Tutup Panel', 'Close Panel')}
                         >
                           ✕
                         </button>
@@ -2285,57 +3944,57 @@ export function App() {
                     {/* Order Metadata Summary Box (Tanggal Masuk, Target Selesai, Status Produksi, PIC Utama) */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: '10px', padding: '12px', background: 'var(--bg-surface)', borderRadius: '12px', marginBottom: '18px', border: '1px solid var(--border-light)' }}>
                       <div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Tgl Masuk Order</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Tgl Masuk Order', 'Received Date')}</div>
                         <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
-                          {new Date(selectedOrder.received_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          {new Date(selectedOrder.received_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
                         </div>
                       </div>
                       <div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Target Selesai</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Target Selesai', 'Promised Due Date')}</div>
                         <div style={{ fontSize: '13px', fontWeight: 800, color: '#dc2626' }}>
-                          {new Date(selectedOrder.promised_due_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          {new Date(selectedOrder.promised_due_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
                         </div>
                       </div>
                       <div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Status Produksi</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Status Produksi', 'Production Status')}</div>
                         <select
                           value={selectedOrder.status}
                           onChange={(e) => handleChangeOrderStatus(selectedOrder.id, e.target.value)}
                           style={{ marginTop: '2px', padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border-light)', fontSize: '12px', fontWeight: 700, background: 'var(--bg-card)', color: 'var(--primary)', width: '100%' }}
                         >
-                          <option value="INTAKE">📥 Order Masuk</option>
-                          <option value="IN_PRODUCTION">⚙️ Dalam Proses</option>
-                          <option value="QC_PENDING">🔍 Menunggu QC</option>
-                          <option value="REOPENED_FOR_REWORK">🔄 Revisi / Rework</option>
-                          <option value="COMPLETED">✅ Selesai Produksi</option>
-                          <option value="DELIVERED">🚚 Dikirim ke Dokter</option>
+                          <option value="INTAKE">📥 {tr('Order Masuk', 'Order Intake')}</option>
+                          <option value="IN_PRODUCTION">⚙️ {tr('Dalam Proses', 'In Production')}</option>
+                          <option value="QC_PENDING">🔍 {tr('Menunggu QC', 'QC Pending')}</option>
+                          <option value="REOPENED_FOR_REWORK">🔄 {tr('Revisi / Rework', 'Rework')}</option>
+                          <option value="COMPLETED">✅ {tr('Selesai Produksi', 'Completed Production')}</option>
+                          <option value="DELIVERED">🚚 {tr('Dikirim ke Dokter', 'Delivered to Doctor')}</option>
                         </select>
                       </div>
                       <div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Biaya SPK</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Biaya SPK', 'SPK Cost')}</div>
                         <div style={{ fontSize: '13px', fontWeight: 800, color: '#16a34a' }}>{formatRupiah(selectedOrder.total_price)}</div>
                       </div>
                     </div>
 
                     {selectedOrder.doctor_notes && (
                       <div style={{ padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '10px', fontSize: '12px', color: '#92400e', marginBottom: '16px' }}>
-                        <strong>Instruksi Dokter:</strong> {selectedOrder.doctor_notes}
+                        <strong>{tr('Instruksi Dokter:', 'Doctor Instructions:')}</strong> {selectedOrder.doctor_notes}
                       </div>
                     )}
 
                     {/* Odontogram View */}
                     <div style={{ marginBottom: '20px' }}>
-                      <Odontogram selectedTeeth={JSON.parse(selectedOrder.teeth_numbers || '[]')} onChange={() => {}} readOnly={true} />
+                      <Odontogram selectedTeeth={JSON.parse(selectedOrder.teeth_numbers || '[]')} onChange={() => {}} readOnly={true} lang={lang} />
                     </div>
 
                     {/* Stage Runs Stepper with Per-Stage PIC Teknis */}
                     <div style={{ marginBottom: '24px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                         <h4 style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)' }}>
-                          ⚙️ Tracking Tahapan Produksi & PIC Teknis:
+                          ⚙️ {tr('Tracking Tahapan Produksi & PIC Teknis:', 'Production Stage Tracking & Technician PIC:')}
                         </h4>
                         <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--primary)' }}>
-                          {selectedOrder.stage_runs?.filter((s) => s.status === 'COMPLETED').length || 0} / {selectedOrder.stage_runs?.length || 0} Tahap Selesai
+                          {selectedOrder.stage_runs?.filter((s) => s.status === 'COMPLETED').length || 0} / {selectedOrder.stage_runs?.length || 0} {tr('Tahap Selesai', 'Stages Completed')}
                         </span>
                       </div>
 
@@ -2396,10 +4055,10 @@ export function App() {
                                   <div style={{ fontSize: '13px', fontWeight: 700, color: isCurrent ? 'var(--primary)' : 'var(--text-main)' }}>
                                     {sr.stage_name}
                                   </div>
-                                  {sr.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Catatan: {sr.notes}</div>}
+                                  {sr.notes && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{tr('Catatan', 'Notes')}: {sr.notes}</div>}
                                   {sr.finished_at && (
                                     <div style={{ fontSize: '10px', color: '#059669', fontWeight: 600 }}>
-                                      Selesai: {new Date(sr.finished_at).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                      {tr('Selesai', 'Completed')}: {new Date(sr.finished_at).toLocaleString(dateLocale, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                                     </div>
                                   )}
                                 </div>
@@ -2414,7 +4073,7 @@ export function App() {
                                     onChange={(e) => handleChangeStagePIC(selectedOrder.id, sr.id, e.target.value)}
                                     style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border-light)', fontSize: '11px', fontWeight: 700, background: 'var(--bg-card)', color: 'var(--text-main)' }}
                                   >
-                                    <option value="">-- Pilih PIC Teknis --</option>
+                                    <option value="">-- {tr('Pilih PIC Teknis', 'Select Technician PIC')} --</option>
                                     {usersList.map((u) => (
                                       <option key={u.id} value={u.id}>
                                         {u.full_name} ({u.role?.name})
@@ -2441,10 +4100,13 @@ export function App() {
                     {/* Photo Documentation & QC Report Section */}
                     <div style={{ marginBottom: '20px', padding: '16px', background: 'var(--bg-surface)', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
                       <h4 style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
-                        📸 Upload Foto Hasil Akhir & Dokumentasi QC Report
+                        📸 {tr('Upload Foto Hasil Akhir & Dokumentasi QC Report', 'Upload Final Result Photo & QC Report Documentation')}
                       </h4>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                        Unggah foto hasil kerja akhir gigi tiruan, foto model gips/wax-up, atau dokumen pemeriksaan Quality Control.
+                        {tr(
+                          'Unggah foto hasil kerja akhir gigi tiruan, foto model gips/wax-up, atau dokumen pemeriksaan Quality Control.',
+                          'Upload photos of final prosthetic work, gypsum model/wax-up photos, or Quality Control inspection documents.'
+                        )}
                       </p>
 
                       <form onSubmit={handleUploadAttachment} style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '14px' }}>
@@ -2454,14 +4116,14 @@ export function App() {
                             onChange={(e) => setAttType(e.target.value)}
                             style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', fontWeight: 600, background: 'var(--bg-card)', color: 'var(--text-main)' }}
                           >
-                            <option value="QC_PHOTO">📸 Foto Hasil Akhir / QC Report</option>
-                            <option value="IMPRESSION_PHOTO">🦷 Foto Model Gips / Wax-up</option>
-                            <option value="TEETH_PHOTO">🎨 Foto Shade / Gigi Pasien</option>
-                            <option value="STL_SCAN">💻 File CAD / 3D Scan</option>
+                            <option value="QC_PHOTO">📸 {tr('Foto Hasil Akhir / QC Report', 'Final Result Photo / QC Report')}</option>
+                            <option value="IMPRESSION_PHOTO">🦷 {tr('Foto Model Gips / Wax-up', 'Gypsum Model / Wax-up Photo')}</option>
+                            <option value="TEETH_PHOTO">🎨 {tr('Foto Shade / Gigi Pasien', 'Shade / Patient Teeth Photo')}</option>
+                            <option value="STL_SCAN">💻 {tr('File CAD / 3D Scan', 'CAD / 3D Scan File')}</option>
                           </select>
                           <input
                             type="text"
-                            placeholder="Keterangan foto (mis: Hasil akhir poles & oklusi)..."
+                            placeholder={tr('Keterangan foto (mis: Hasil akhir poles & oklusi)...', 'Photo description (e.g., Final polish & occlusion)...')}
                             value={attDesc}
                             onChange={(e) => setAttDesc(e.target.value)}
                             style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
@@ -2483,7 +4145,7 @@ export function App() {
                             disabled={!attFile || uploadingAtt}
                             style={{ padding: '8px 16px', borderRadius: '8px', background: 'var(--primary)', color: '#ffffff', fontSize: '12px', fontWeight: 700, opacity: !attFile ? 0.6 : 1 }}
                           >
-                            {uploadingAtt ? 'Mengunggah...' : '⬆️ Upload Foto / QC'}
+                            {uploadingAtt ? tr('Mengunggah...', 'Uploading...') : tr('⬆️ Upload Foto / QC', '⬆️ Upload Photo / QC')}
                           </button>
                         </div>
                       </form>
@@ -2519,7 +4181,9 @@ export function App() {
                       {/* Quality Checks History */}
                       {selectedOrder.quality_checks && selectedOrder.quality_checks.length > 0 && (
                         <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border-light)' }}>
-                          <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '6px' }}>📋 Riwayat Laporan Quality Control (QC Report):</div>
+                          <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '6px' }}>
+                            📋 {tr('Riwayat Laporan Quality Control (QC Report):', 'Quality Control Report History (QC Report):')}
+                          </div>
                           {selectedOrder.quality_checks.map((qc) => (
                             <div
                               key={qc.id}
@@ -2533,17 +4197,160 @@ export function App() {
                               }}
                             >
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: qc.passed ? '#065f46' : '#991b1b' }}>
-                                <span>{qc.passed ? '✓ LOLOS QC' : `✗ REVISI (${qc.rework_target_stage})`}</span>
+                                <span>{qc.passed ? tr('✓ LOLOS QC', '✓ PASSED QC') : `✗ ${tr('REVISI', 'REWORK')} (${qc.rework_target_stage})`}</span>
                                 <span style={{ fontSize: '11px' }}>
-                                  Oleh: {qc.inspector?.full_name || 'Inspector'} ({new Date(qc.checked_at).toLocaleDateString('id-ID')})
+                                  {tr('Oleh', 'By')}: {qc.inspector?.full_name || 'Inspector'} ({new Date(qc.checked_at).toLocaleDateString(dateLocale)})
                                 </span>
                               </div>
-                              {qc.defect_notes && <div style={{ color: 'var(--text-main)', marginTop: '2px' }}>Catatan QC: {qc.defect_notes}</div>}
+                              {qc.defect_notes && <div style={{ color: 'var(--text-main)', marginTop: '2px' }}>{tr('Catatan QC', 'QC Notes')}: {qc.defect_notes}</div>}
                             </div>
                           ))}
                         </div>
                       )}
                     </div>
+
+                    {/* Kartu Hasil Order & Integrasi Invoice Pembayaran Otomatis */}
+                    {(() => {
+                      const linkedInv = invoices.find(
+                        (inv) => inv.production_order_id === selectedOrder.id || inv.production_order?.id === selectedOrder.id
+                      )
+                      return (
+                        <div
+                          style={{
+                            marginBottom: '16px',
+                            padding: '14px 16px',
+                            borderRadius: '12px',
+                            background: linkedInv
+                              ? linkedInv.status === 'PAID'
+                                ? '#ecfdf5'
+                                : '#eff6ff'
+                              : 'var(--bg-surface)',
+                            border: linkedInv
+                              ? linkedInv.status === 'PAID'
+                                ? '1px solid #a7f3d0'
+                                : '1px solid #bfdbfe'
+                              : '1px solid var(--border-light)',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                            <div>
+                              <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-main)' }}>
+                                🧾 {tr('Ringkasan Hasil Order & Integrasi Invoice Keuangan', 'Order Result Summary & Financial Invoice Integration')}
+                              </div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                {selectedOrder.denture_type?.name} • {tr('Pasien', 'Patient')}: <strong>{selectedOrder.patient_name}</strong> • Shade: <strong>{selectedOrder.shade_guide || 'A2'}</strong>
+                              </div>
+                            </div>
+                            {linkedInv ? (
+                              <span
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: '999px',
+                                  fontSize: '11px',
+                                  fontWeight: 800,
+                                  background:
+                                    linkedInv.status === 'PAID'
+                                      ? '#059669'
+                                      : linkedInv.status === 'PARTIALLY_PAID'
+                                      ? '#d97706'
+                                      : '#dc2626',
+                                  color: '#ffffff',
+                                }}
+                              >
+                                {linkedInv.invoice_number} •{' '}
+                                {linkedInv.status === 'PAID'
+                                  ? tr('LUNAS', 'PAID')
+                                  : linkedInv.status === 'PARTIALLY_PAID'
+                                  ? tr('CICILAN', 'PARTIAL')
+                                  : tr('BELUM LUNAS', 'UNPAID')}
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: '999px',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  background: '#fef3c7',
+                                  color: '#b45309',
+                                }}
+                              >
+                                {tr('Invoice Otomatis saat Selesai / Lolos QC', 'Auto-Invoice upon Completion / QC Pass')}
+                              </span>
+                            )}
+                          </div>
+
+                          <div
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: 'repeat(3, 1fr)',
+                              gap: '8px',
+                              padding: '8px 10px',
+                              background: 'var(--bg-card)',
+                              borderRadius: '8px',
+                              border: '1px solid var(--border-light)',
+                              fontSize: '12px',
+                              marginBottom: linkedInv ? '10px' : '0',
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{tr('Nilai Hasil Order', 'Order Value')}</div>
+                              <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>{formatRupiah(selectedOrder.total_price)}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{tr('Terbayar', 'Paid')}</div>
+                              <div style={{ fontWeight: 800, color: '#16a34a' }}>{formatRupiah(linkedInv?.paid_amount || 0)}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{tr('Sisa Tagihan', 'Balance Due')}</div>
+                              <div style={{ fontWeight: 800, color: (linkedInv ? linkedInv.balance_due : selectedOrder.total_price) > 0 ? '#dc2626' : '#059669' }}>
+                                {formatRupiah(linkedInv ? linkedInv.balance_due : selectedOrder.total_price)}
+                              </div>
+                            </div>
+                          </div>
+
+                          {linkedInv && (
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                onClick={() => setViewingInvoice(linkedInv)}
+                                style={{
+                                  flex: 1,
+                                  padding: '7px 12px',
+                                  background: 'var(--bg-card)',
+                                  color: 'var(--primary)',
+                                  border: '1.5px solid var(--primary)',
+                                  borderRadius: '8px',
+                                  fontSize: '12px',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                📄 {tr('Lihat & Cetak Nota + Hasil Order', 'View & Print Invoice + Order Result')}
+                              </button>
+                              {linkedInv.balance_due > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedInvoice(linkedInv)
+                                    setPaymentAmount(linkedInv.balance_due)
+                                  }}
+                                  style={{
+                                    padding: '7px 12px',
+                                    background: '#059669',
+                                    color: '#ffffff',
+                                    borderRadius: '8px',
+                                    fontSize: '12px',
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  💳 {tr('Catat Bayar', 'Record Payment')}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {/* QC Action / Delivery Action / Invoice Action */}
                     <div style={{ display: 'flex', gap: '10px', borderTop: '1px solid var(--border-light)', paddingTop: '16px', flexWrap: 'wrap' }}>
@@ -2556,7 +4363,7 @@ export function App() {
                           }}
                           style={{ flex: 1, padding: '10px 14px', background: '#d97706', color: '#ffffff', borderRadius: '8px', fontWeight: 700, fontSize: '13px' }}
                         >
-                          🔍 {t.qcBtn}
+                          🔍 {t.qcBtn} ({tr('Otomatis Buat Invoice jika Lolos', 'Auto-Generates Invoice on Pass')})
                         </button>
                       )}
 
@@ -2566,13 +4373,13 @@ export function App() {
                             onClick={() => handleChangeOrderStatus(selectedOrder.id, 'DELIVERED')}
                             style={{ flex: 1, padding: '10px 14px', background: '#0d9488', color: '#ffffff', borderRadius: '8px', fontWeight: 700, fontSize: '13px' }}
                           >
-                            🚚 Tandai Dikirim ke Dokter
+                            🚚 {tr('Tandai Dikirim ke Dokter', 'Mark as Delivered to Doctor')}
                           </button>
                           <button
                             onClick={() => handleCreateInvoice(selectedOrder.id)}
                             style={{ flex: 1, padding: '10px 14px', background: '#059669', color: '#ffffff', borderRadius: '8px', fontWeight: 700, fontSize: '13px' }}
                           >
-                            💳 {t.createInvoiceBtn}
+                            🧾 {tr('Lihat / Terbitkan Nota Invoice', 'View / Issue Invoice')}
                           </button>
                         </>
                       )}
@@ -2582,7 +4389,7 @@ export function App() {
                           onClick={() => handleCreateInvoice(selectedOrder.id)}
                           style={{ flex: 1, padding: '10px 14px', background: '#059669', color: '#ffffff', borderRadius: '8px', fontWeight: 700, fontSize: '13px' }}
                         >
-                          💳 {t.createInvoiceBtn}
+                          🧾 {tr('Lihat / Cetak Nota Invoice & Hasil Order', 'View / Print Invoice & Order Result')}
                         </button>
                       )}
                     </div>
@@ -2598,13 +4405,16 @@ export function App() {
               <div style={{ marginBottom: '24px' }}>
                 <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>{t.newOrderTitle}</h2>
                 <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
-                  Input order produksi gigi tiruan: nama dokter/pasien, jenis gigi tiruan, tanggal masuk, target selesai, PIC Teknis, dan acuan odontogram.
+                  {tr(
+                    'Input order produksi gigi tiruan: nama dokter/pasien, jenis gigi tiruan, tanggal masuk, target selesai, PIC Teknis, dan acuan odontogram.',
+                    'Input prosthetic production order: doctor/patient name, denture type, received date, promised due date, Technician PIC, and odontogram chart.'
+                  )}
                 </p>
               </div>
 
               <form onSubmit={handleCreateOrder} style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '28px', boxShadow: 'var(--shadow-sm)' }}>
                 <div className="grid-2col" style={{ marginBottom: '20px', alignItems: 'start' }}>
-                  {/* Master Dokter / Klinik Pengirim */}
+                  {/* Master Dokter / Klinik */}
                   <div style={{ minWidth: 0 }}>
                     <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>
                       {t.doctorClinicLabel}
@@ -2642,11 +4452,11 @@ export function App() {
                               🏥 {doc.code} — {doc.clinic_name}
                             </span>
                             <span style={{ padding: '2px 8px', borderRadius: '99px', fontSize: '11px', fontWeight: 800, background: doc.discount_percent ? '#fef3c7' : '#e2e8f0', color: doc.discount_percent ? '#b45309' : '#475569' }}>
-                              ★ {doc.loyalty_tier || 'REGULAR'} {doc.discount_percent ? `(Diskon ${doc.discount_percent}%)` : ''}
+                              ★ {doc.loyalty_tier || 'REGULAR'} {doc.discount_percent ? `(${tr('Diskon', 'Discount')} ${doc.discount_percent}%)` : ''}
                             </span>
                           </div>
                           <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
-                            Preferensi: <strong>{doc.favorite_shade || '-'}</strong> | Favorit: <strong>{doc.favorite_denture_type || '-'}</strong>
+                            {tr('Preferensi', 'Preference')}: <strong>{doc.favorite_shade || '-'}</strong> | {tr('Favorit', 'Favorite')}: <strong>{doc.favorite_denture_type || '-'}</strong>
                           </div>
                           {doc.notes && (
                             <div style={{ color: 'var(--text-main)', fontSize: '11px', marginTop: '3px', fontStyle: 'italic' }}>
@@ -2678,19 +4488,19 @@ export function App() {
                         required={!newOrderPatient}
                         style={{ flex: 1, minWidth: 0, width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '14px', background: 'var(--bg-card)', color: 'var(--text-main)', textOverflow: 'ellipsis' }}
                       >
-                        <option value="">Pilih Pasien...</option>
+                        <option value="">{tr('Pilih Pasien...', 'Select Patient...')}</option>
                         {newOrderCustomer && patients.some((p) => p.customer_id === newOrderCustomer) && (
-                          <optgroup label="Pasien Dokter Ini">
+                          <optgroup label={tr('Pasien Dokter Ini', 'Patients of This Doctor')}>
                             {patients
                               .filter((p) => p.customer_id === newOrderCustomer)
                               .map((p) => (
                                 <option key={p.id} value={p.id}>
-                                  {p.name} ({p.code}) — {p.gender === 'P' ? 'P' : 'L'}, {p.age} thn [{p.default_shade}]
+                                  {p.name} ({p.code}) — {p.gender === 'P' ? (lang === 'en' ? 'F' : 'P') : (lang === 'en' ? 'M' : 'L')}, {p.age} {tr('thn', 'yo')} [{p.default_shade}]
                                 </option>
                               ))}
                           </optgroup>
                         )}
-                        <optgroup label="Semua Master Pasien">
+                        <optgroup label={tr('Semua Master Pasien', 'All Master Patients')}>
                           {patients.map((p) => (
                             <option key={p.id} value={p.id}>
                               {p.name} ({p.code}) {p.customer?.name ? `— ${p.customer.name}` : ''}
@@ -2713,11 +4523,11 @@ export function App() {
                       return (
                         <div style={{ marginTop: '8px', padding: '10px 12px', borderRadius: '10px', background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: '12px', color: '#166534' }}>
                           <div style={{ fontWeight: 800 }}>
-                            🧑 {pat.code} — {pat.name} ({pat.gender === 'P' ? 'Perempuan' : 'Laki-laki'}, {pat.age} thn) | Shade: {pat.default_shade}
+                            🧑 {pat.code} — {pat.name} ({pat.gender === 'P' ? tr('Perempuan', 'Female') : tr('Laki-laki', 'Male')}, {pat.age} {tr('thn', 'yrs')}) | Shade: {pat.default_shade}
                           </div>
                           {pat.allergies_or_notes && (
                             <div style={{ marginTop: '3px', color: '#b91c1c', fontWeight: 700, fontSize: '11px' }}>
-                              ⚠️ Catatan Medis / Alergi: {pat.allergies_or_notes}
+                              ⚠️ {tr('Catatan Medis / Alergi', 'Medical / Allergy Notes')}: {pat.allergies_or_notes}
                             </div>
                           )}
                         </div>
@@ -2789,7 +4599,7 @@ export function App() {
                 {dentureTypes.find((dt) => dt.id === Number(newOrderType))?.stage_templates && (
                   <div style={{ marginBottom: '20px', padding: '12px 14px', background: 'var(--primary-subtle)', borderRadius: '10px', border: '1px solid var(--primary-light)' }}>
                     <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--primary)', marginBottom: '6px', textTransform: 'uppercase' }}>
-                      Alur Tahapan Produksi Otomatis:
+                      {tr('Alur Tahapan Produksi Otomatis:', 'Automatic Production Stage Workflow:')}
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)' }}>
                       {dentureTypes
@@ -2808,14 +4618,14 @@ export function App() {
 
                 {/* Odontogram Interactive Teeth Selector */}
                 <div style={{ marginBottom: '20px' }}>
-                  <Odontogram selectedTeeth={newOrderTeeth} onChange={setNewOrderTeeth} />
+                  <Odontogram selectedTeeth={newOrderTeeth} onChange={setNewOrderTeeth} lang={lang} />
                 </div>
 
                 {/* Tanggal Masuk, Target Selesai, PIC Teknis & Estimasi Harga */}
                 <div className="grid-2col" style={{ marginBottom: '16px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>
-                      Tanggal Masuk Order *
+                      {tr('Tanggal Masuk Order *', 'Order Received Date *')}
                     </label>
                     <input
                       type="date"
@@ -2828,7 +4638,7 @@ export function App() {
 
                   <div>
                     <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>
-                      Target Selesai (Tenggat) *
+                      {tr('Target Selesai (Tenggat) *', 'Promised Due Date *')}
                     </label>
                     <input
                       type="date"
@@ -2843,14 +4653,14 @@ export function App() {
                 <div className="grid-2col" style={{ marginBottom: '20px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>
-                      PIC Teknis Penanggung Jawab
+                      {tr('PIC Teknis Penanggung Jawab', 'Assigned Technician PIC')}
                     </label>
                     <select
                       value={newOrderTechId}
                       onChange={(e) => setNewOrderTechId(e.target.value)}
                       style={{ width: '100%', padding: '10px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '14px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                     >
-                      <option value="">-- Pilih PIC Teknis --</option>
+                      <option value="">-- {tr('Pilih PIC Teknis', 'Select Technician PIC')} --</option>
                       {usersList.map((u) => (
                         <option key={u.id} value={u.id}>
                           {u.full_name} ({u.role?.name})
@@ -2875,7 +4685,7 @@ export function App() {
                       if (doc && (doc.discount_percent || 0) > 0 && dt) {
                         return (
                           <div style={{ fontSize: '11px', color: '#059669', fontWeight: 700, marginTop: '4px' }}>
-                            🏷️ Harga Normal {formatRupiah(dt.base_price)} — Diskon Loyalty {doc.loyalty_tier} ({doc.discount_percent}%): Hemat {formatRupiah(Math.round((dt.base_price * (doc.discount_percent || 0)) / 100))}
+                            🏷️ {tr('Harga Normal', 'Base Price')} {formatRupiah(dt.base_price)} — {tr('Diskon Loyalty', 'Loyalty Discount')} {doc.loyalty_tier} ({doc.discount_percent}%): {tr('Hemat', 'Save')} {formatRupiah(Math.round((dt.base_price * (doc.discount_percent || 0)) / 100))}
                           </div>
                         )
                       }
@@ -2886,7 +4696,7 @@ export function App() {
 
                 <div style={{ marginBottom: '16px' }}>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>
-                    Upload Foto Cetakan Awal / Referensi Pasien (Opsional)
+                    {tr('Upload Foto Cetakan Awal / Referensi Pasien (Opsional)', 'Upload Initial Impression / Patient Reference Photo (Optional)')}
                   </label>
                   <input
                     type="file"
@@ -2906,7 +4716,7 @@ export function App() {
                   </label>
                   <textarea
                     rows={3}
-                    placeholder="Instruksi anatomi, kontak proksimal, adaptasi tepi..."
+                    placeholder={tr('Instruksi anatomi, kontak proksimal, adaptasi tepi...', 'Anatomical instructions, proximal contact, marginal adaptation...')}
                     value={newOrderDoctorNotes}
                     onChange={(e) => setNewOrderDoctorNotes(e.target.value)}
                     style={{ width: '100%', padding: '10px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '14px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
@@ -2926,7 +4736,7 @@ export function App() {
                     disabled={loading}
                     style={{ padding: '12px 28px', borderRadius: '10px', background: 'var(--primary)', color: '#ffffff', fontWeight: 700, fontSize: '14px' }}
                   >
-                    {loading ? 'Menyimpan...' : t.submitOrderBtn}
+                    {loading ? tr('Menyimpan...', 'Saving...') : t.submitOrderBtn}
                   </button>
                 </div>
               </form>
@@ -2939,9 +4749,14 @@ export function App() {
               {/* Header & Quick Action Buttons */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
-                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>Manajemen Bahan, Produk & Inventori</h2>
+                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    {tr('Manajemen Bahan, Produk & Inventori', 'Material, Product & Inventory Management')}
+                  </h2>
                   <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
-                    Master data bahan & produk, pencatatan stok masuk/keluar otomatis, batch & exp tracking, serta laporan analitik penggunaan bahan.
+                    {tr(
+                      'Master data bahan & produk, pencatatan stok masuk/keluar otomatis, batch & exp tracking, serta laporan analitik penggunaan bahan.',
+                      'Material & product master data, automated stock in/out logging, batch & expiration tracking, and material usage analytics.'
+                    )}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -2949,7 +4764,7 @@ export function App() {
                     onClick={openCreateItemModal}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-card)', color: 'var(--primary)', border: '1.5px solid var(--primary)', padding: '9px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}
                   >
-                    <Plus size={15} /> Master Bahan / Produk
+                    <Plus size={15} /> {tr('Master Bahan / Produk', 'Material / Product Master')}
                   </button>
                   <button
                     onClick={() => {
@@ -2965,7 +4780,7 @@ export function App() {
                     }}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#10b981', color: '#ffffff', padding: '9px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}
                   >
-                    + Stok Masuk (Beli)
+                    {tr('+ Stok Masuk (Beli)', '+ Stock In (Purchase)')}
                   </button>
                   <button
                     onClick={() => {
@@ -2979,7 +4794,7 @@ export function App() {
                     }}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f59e0b', color: '#ffffff', padding: '9px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}
                   >
-                    - Pakai Bahan (Keluar)
+                    {tr('- Pakai Bahan (Keluar)', '- Use Material (Stock Out)')}
                   </button>
                   <button
                     onClick={() => {
@@ -3003,7 +4818,10 @@ export function App() {
                     <AlertCircle size={22} color="#dc2626" style={{ flexShrink: 0, marginTop: '2px' }} />
                     <div>
                       <div style={{ fontSize: '14px', fontWeight: 800, color: '#991b1b' }}>
-                        Peringatan Minimum Stok! ({inventoryItems.filter((i) => i.current_stock <= i.min_stock_level).length} Bahan di Bawah Batas Aman)
+                        {tr(
+                          `Peringatan Minimum Stok! (${inventoryItems.filter((i) => i.current_stock <= i.min_stock_level).length} Bahan di Bawah Batas Aman)`,
+                          `Minimum Stock Warning! (${inventoryItems.filter((i) => i.current_stock <= i.min_stock_level).length} Materials Below Safe Limit)`
+                        )}
                       </div>
                       <div style={{ fontSize: '13px', color: '#b91c1c', marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                         {inventoryItems
@@ -3013,19 +4831,19 @@ export function App() {
                               key={low.id}
                               style={{ background: '#fee2e2', border: '1px solid #fecaca', padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, color: '#991b1b', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                             >
-                              {low.name}: sisa {low.current_stock} {low.unit?.code} (Min: {low.min_stock_level} {low.unit?.code})
+                              {low.name}: {tr('sisa', 'rem.')} {low.current_stock} {low.unit?.code} (Min: {low.min_stock_level} {low.unit?.code})
                               <button
                                 onClick={() => {
                                   setPrItem(low.id)
                                   setPrEstPrice(low.purchase_price)
                                   setPrSupplierId(low.supplier_id || '')
                                   setPrQty(Math.max(low.min_stock_level * 2 - low.current_stock, 5))
-                                  setPrNotes(`Restock bahan di bawah batas aman (${low.name})`)
+                                  setPrNotes(tr(`Restock bahan di bawah batas aman (${low.name})`, `Restock material below safe limit (${low.name})`))
                                   setShowAddPRModal(true)
                                 }}
                                 style={{ background: '#dc2626', color: '#ffffff', padding: '1px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: 700 }}
                               >
-                                Beli
+                                {tr('Beli', 'Buy')}
                               </button>
                             </span>
                           ))}
@@ -3038,33 +4856,51 @@ export function App() {
               {/* Inventory Real-Time KPI Summary Cards */}
               <div className="grid-stats" style={{ marginBottom: '20px' }}>
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Total Jenis Bahan & Produk</div>
-                  <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--text-main)' }}>{inventoryItems.length} Item</div>
-                  <span style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600 }}>Stok Real-Time Terpantau</span>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    {tr('Total Jenis Bahan & Produk', 'Total Material & Product Types')}
+                  </div>
+                  <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    {inventoryItems.length} {tr('Item', 'Items')}
+                  </div>
+                  <span style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600 }}>
+                    {tr('Stok Real-Time Terpantau', 'Real-Time Stock Monitored')}
+                  </span>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Total Nilai Stok Gudang</div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    {tr('Total Nilai Stok Gudang', 'Total Warehouse Stock Value')}
+                  </div>
                   <div style={{ fontSize: '22px', fontWeight: 800, color: '#16a34a' }}>
                     {formatRupiah(inventoryReport?.total_stock_value || inventoryItems.reduce((acc, i) => acc + i.current_stock * i.purchase_price, 0))}
                   </div>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Valuasi aset bahan & produk saat ini</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {tr('Valuasi aset bahan & produk saat ini', 'Current material & product asset valuation')}
+                  </span>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Notifikasi Minimum Stok</div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    {tr('Notifikasi Minimum Stok', 'Minimum Stock Alert')}
+                  </div>
                   <div style={{ fontSize: '26px', fontWeight: 800, color: inventoryItems.filter((i) => i.current_stock <= i.min_stock_level).length > 0 ? '#dc2626' : '#10b981' }}>
-                    {inventoryItems.filter((i) => i.current_stock <= i.min_stock_level).length} Bahan
+                    {inventoryItems.filter((i) => i.current_stock <= i.min_stock_level).length} {tr('Bahan', 'Items')}
                   </div>
-                  <span style={{ fontSize: '11px', color: '#dc2626', fontWeight: 600 }}>Di bawah batas aman stok</span>
+                  <span style={{ fontSize: '11px', color: '#dc2626', fontWeight: 600 }}>
+                    {tr('Di bawah batas aman stok', 'Below safe stock threshold')}
+                  </span>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Monitoring Batch & Exp</div>
-                  <div style={{ fontSize: '26px', fontWeight: 800, color: (inventoryReport?.expiring_soon_count || 0) + (inventoryReport?.expired_count || 0) > 0 ? '#d97706' : 'var(--text-main)' }}>
-                    {(inventoryReport?.expiring_soon_count || 0) + (inventoryReport?.expired_count || 0)} Batch
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    {tr('Monitoring Batch & Exp', 'Batch & Expiry Monitoring')}
                   </div>
-                  <span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>Mendekati Exp (&lt; 60 hari) / Expired</span>
+                  <div style={{ fontSize: '26px', fontWeight: 800, color: (inventoryReport?.expiring_soon_count || 0) + (inventoryReport?.expired_count || 0) > 0 ? '#d97706' : 'var(--text-main)' }}>
+                    {(inventoryReport?.expiring_soon_count || 0) + (inventoryReport?.expired_count || 0)} {tr('Batch', 'Batches')}
+                  </div>
+                  <span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>
+                    {tr('Mendekati Exp (< 60 hari) / Expired', 'Expiring Soon (< 60 days) / Expired')}
+                  </span>
                 </div>
               </div>
 
@@ -3076,7 +4912,7 @@ export function App() {
                     const el = document.getElementById('inv-tabs-scroll')
                     if (el) el.scrollBy({ left: -220, behavior: 'smooth' })
                   }}
-                  title="Geser Kiri"
+                  title={tr('Geser Kiri', 'Scroll Left')}
                   style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)', color: 'var(--text-main)', fontWeight: 800, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 >
                   ‹
@@ -3109,11 +4945,11 @@ export function App() {
                   }}
                 >
                   {[
-                    { id: 'master', label: `📦 Master Bahan & Produk (${inventoryItems.length})` },
-                    { id: 'movements', label: `🔄 Stok Masuk & Keluar (${stockMovements.length})` },
-                    { id: 'batches', label: `🧪 Batch & Exp Tracking (${inventoryBatches.length})` },
-                    { id: 'report', label: `📊 Laporan Inventori & Pemakaian` },
-                    { id: 'suppliers', label: `🏢 Data Supplier (${suppliersList.length})` },
+                    { id: 'master', label: tr(`📦 Master Bahan & Produk (${inventoryItems.length})`, `📦 Material & Product Master (${inventoryItems.length})`) },
+                    { id: 'movements', label: tr(`🔄 Stok Masuk & Keluar (${stockMovements.length})`, `🔄 Stock In & Out (${stockMovements.length})`) },
+                    { id: 'batches', label: tr(`🧪 Batch & Exp Tracking (${inventoryBatches.length})`, `🧪 Batch & Expiry Tracking (${inventoryBatches.length})`) },
+                    { id: 'report', label: tr(`📊 Laporan Inventori & Pemakaian`, `📊 Inventory & Usage Report`) },
+                    { id: 'suppliers', label: tr(`🏢 Data Supplier (${suppliersList.length})`, `🏢 Supplier Directory (${suppliersList.length})`) },
                   ].map((tab) => {
                     const isCurrent = invSubTab === tab.id
                     return (
@@ -3145,7 +4981,7 @@ export function App() {
                     const el = document.getElementById('inv-tabs-scroll')
                     if (el) el.scrollBy({ left: 220, behavior: 'smooth' })
                   }}
-                  title="Geser Kanan"
+                  title={tr('Geser Kanan', 'Scroll Right')}
                   style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)', color: 'var(--text-main)', fontWeight: 800, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 >
                   ›
@@ -3160,7 +4996,10 @@ export function App() {
                       <Search size={17} color="var(--text-subtle)" style={{ position: 'absolute', left: '12px', top: '11px' }} />
                       <input
                         type="text"
-                        placeholder="Cari nama bahan (akrilik, gips, logam, gigi tiruan), kode, atau nomor batch..."
+                        placeholder={tr(
+                          'Cari nama bahan (akrilik, gips, logam, gigi tiruan), kode, atau nomor batch...',
+                          'Search material name (acrylic, gypsum, metal, denture), code, or batch number...'
+                        )}
                         value={invSearch}
                         onChange={(e) => setInvSearch(e.target.value)}
                         style={{ width: '100%', padding: '9px 14px 9px 38px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-card)', color: 'var(--text-main)', fontSize: '13px' }}
@@ -3171,11 +5010,11 @@ export function App() {
                       onChange={(e) => setInvCategoryFilter(e.target.value)}
                       style={{ padding: '9px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-card)', color: 'var(--text-main)', fontSize: '13px', fontWeight: 600 }}
                     >
-                      <option value="">Semua Kategori</option>
-                      <option value="RAW_MATERIAL">RAW_MATERIAL (Bahan Baku)</option>
-                      <option value="PRODUCT">PRODUCT (Produk / Elemen Gigi)</option>
-                      <option value="CONSUMABLE">CONSUMABLE (Bahan Habis Pakai)</option>
-                      <option value="TOOL">TOOL (Alat & Mata Bur)</option>
+                      <option value="">{tr('Semua Kategori', 'All Categories')}</option>
+                      <option value="RAW_MATERIAL">{tr('RAW_MATERIAL (Bahan Baku)', 'RAW_MATERIAL (Raw Materials)')}</option>
+                      <option value="PRODUCT">{tr('PRODUCT (Produk / Elemen Gigi)', 'PRODUCT (Products / Tooth Elements)')}</option>
+                      <option value="CONSUMABLE">{tr('CONSUMABLE (Bahan Habis Pakai)', 'CONSUMABLE (Consumables)')}</option>
+                      <option value="TOOL">{tr('TOOL (Alat & Mata Bur)', 'TOOL (Instruments & Burs)')}</option>
                     </select>
                   </div>
 
@@ -3184,15 +5023,15 @@ export function App() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                         <thead>
                           <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                            <th style={{ padding: '10px' }}>Kode</th>
-                            <th style={{ padding: '10px' }}>Nama Bahan / Produk</th>
-                            <th style={{ padding: '10px' }}>Kategori</th>
+                            <th style={{ padding: '10px' }}>{tr('Kode', 'Code')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Nama Bahan / Produk', 'Material / Product Name')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Kategori', 'Category')}</th>
                             <th style={{ padding: '10px' }}>Supplier</th>
-                            <th style={{ padding: '10px' }}>Stok & Batas Min</th>
-                            <th style={{ padding: '10px' }}>Harga / Nilai Stok</th>
-                            <th style={{ padding: '10px' }}>Batch & Tgl Exp</th>
-                            <th style={{ padding: '10px' }}>Status</th>
-                            <th style={{ padding: '10px' }}>Aksi</th>
+                            <th style={{ padding: '10px' }}>{tr('Stok & Batas Min', 'Stock & Min Limit')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Harga / Nilai Stok', 'Unit Cost / Stock Value')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Batch & Tgl Exp', 'Batch & Expiry Date')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Status', 'Status')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Aksi', 'Action')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -3245,8 +5084,8 @@ export function App() {
                                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>{item.lot_number || '-'}</div>
                                     {expDate ? (
                                       <div style={{ fontSize: '11px', fontWeight: 700, color: isExpired ? '#dc2626' : isExpSoon ? '#d97706' : 'var(--text-muted)' }}>
-                                        Exp: {expDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                        {isExpired ? ' (EXPIRED)' : isExpSoon ? ` (${daysToExp} hr lagi)` : ''}
+                                        Exp: {expDate.toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                        {isExpired ? ' (EXPIRED)' : isExpSoon ? ` (${daysToExp} ${tr('hr lagi', 'days left')})` : ''}
                                       </div>
                                     ) : (
                                       <div style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>Non-Exp</div>
@@ -3255,11 +5094,11 @@ export function App() {
                                   <td style={{ padding: '12px 10px' }}>
                                     {isLow ? (
                                       <span style={{ background: '#fee2e2', color: '#dc2626', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 800 }}>
-                                        ⚠️ Stok Menipis
+                                        ⚠️ {tr('Stok Menipis', 'Low Stock')}
                                       </span>
                                     ) : (
                                       <span style={{ background: '#ecfdf5', color: '#059669', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700 }}>
-                                        ✓ Aman
+                                        ✓ {tr('Aman', 'Safe')}
                                       </span>
                                     )}
                                   </td>
@@ -3276,10 +5115,10 @@ export function App() {
                                           setInNotes(`Restock ${item.name}`)
                                           setShowStockInModal(true)
                                         }}
-                                        title="Catat Stok Masuk"
+                                        title={tr('Catat Stok Masuk', 'Record Stock In')}
                                         style={{ padding: '4px 8px', borderRadius: '6px', background: '#dcfce7', color: '#166534', fontSize: '11px', fontWeight: 700 }}
                                       >
-                                        + Masuk
+                                        {tr('+ Masuk', '+ In')}
                                       </button>
                                       <button
                                         onClick={() => {
@@ -3287,13 +5126,13 @@ export function App() {
                                           setOutBatchId('')
                                           setOutQty(1)
                                           setOutOrderId('')
-                                          setOutNotes(`Pemakaian ${item.name}`)
+                                          setOutNotes(tr(`Pemakaian ${item.name}`, `Usage of ${item.name}`))
                                           setShowStockOutModal(true)
                                         }}
-                                        title="Catat Pemakaian Bahan"
+                                        title={tr('Catat Pemakaian Bahan', 'Record Material Usage')}
                                         style={{ padding: '4px 8px', borderRadius: '6px', background: '#fef3c7', color: '#92400e', fontSize: '11px', fontWeight: 700 }}
                                       >
-                                        - Pakai
+                                        {tr('- Pakai', '- Use')}
                                       </button>
                                       <button
                                         onClick={() => openEditItemModal(item)}
@@ -3318,8 +5157,15 @@ export function App() {
                 <div className="animate-fade-in">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
                     <div>
-                      <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>Riwayat Mutasi Stok Masuk & Keluar</h3>
-                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Pencatatan otomatis setiap kali ada penerimaan pembelian atau pemakaian bahan produksi.</p>
+                      <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>
+                        {tr('Riwayat Mutasi Stok Masuk & Keluar', 'Stock In & Out Movement History')}
+                      </h3>
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                        {tr(
+                          'Pencatatan otomatis setiap kali ada penerimaan pembelian atau pemakaian bahan produksi.',
+                          'Automatic audit trail whenever purchase receipts or production material usages occur.'
+                        )}
+                      </p>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       {['', 'IN', 'OUT'].map((tFilter) => (
@@ -3336,7 +5182,11 @@ export function App() {
                             border: '1px solid var(--border-light)',
                           }}
                         >
-                          {tFilter === '' ? 'Semua Mutasi' : tFilter === 'IN' ? '⬇ Stok Masuk (Beli)' : '⬆ Stok Keluar (Pakai)'}
+                          {tFilter === ''
+                            ? tr('Semua Mutasi', 'All Movements')
+                            : tFilter === 'IN'
+                            ? tr('⬇ Stok Masuk (Beli)', '⬇ Stock In (Purchase)')
+                            : tr('⬆ Stok Keluar (Pakai)', '⬆ Stock Out (Usage)')}
                         </button>
                       ))}
                     </div>
@@ -3347,13 +5197,13 @@ export function App() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                         <thead>
                           <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                            <th style={{ padding: '10px' }}>Waktu</th>
-                            <th style={{ padding: '10px' }}>Tipe Mutasi</th>
-                            <th style={{ padding: '10px' }}>Bahan / Produk</th>
-                            <th style={{ padding: '10px' }}>Jumlah (Qty)</th>
+                            <th style={{ padding: '10px' }}>{tr('Waktu', 'Timestamp')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Tipe Mutasi', 'Movement Type')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Bahan / Produk', 'Material / Product')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Jumlah (Qty)', 'Quantity (Qty)')}</th>
                             <th style={{ padding: '10px' }}>Batch / Lot</th>
-                            <th style={{ padding: '10px' }}>Nilai Satuan</th>
-                            <th style={{ padding: '10px' }}>Referensi & Keterangan</th>
+                            <th style={{ padding: '10px' }}>{tr('Nilai Satuan', 'Unit Cost')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Referensi & Keterangan', 'Reference & Notes')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -3364,7 +5214,7 @@ export function App() {
                               return (
                                 <tr key={mv.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
                                   <td style={{ padding: '12px 10px', color: 'var(--text-muted)', fontSize: '12px' }}>
-                                    {new Date(mv.created_at).toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                    {new Date(mv.created_at).toLocaleString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                   </td>
                                   <td style={{ padding: '12px 10px' }}>
                                     <span
@@ -3377,7 +5227,7 @@ export function App() {
                                         color: isIn ? '#166534' : '#92400e',
                                       }}
                                     >
-                                      {isIn ? '⬇ STOK MASUK' : '⬆ STOK KELUAR'}
+                                      {isIn ? tr('⬇ STOK MASUK', '⬇ STOCK IN') : tr('⬆ STOK KELUAR', '⬆ STOCK OUT')}
                                     </span>
                                   </td>
                                   <td style={{ padding: '12px 10px', fontWeight: 700, color: 'var(--text-main)' }}>
@@ -3409,9 +5259,14 @@ export function App() {
               {invSubTab === 'batches' && (
                 <div className="animate-fade-in">
                   <div style={{ marginBottom: '16px' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>Batch & Expiration Date Tracking (Bahan Medis & Gigi Tiruan Resin)</h3>
+                    <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>
+                      {tr('Batch & Expiration Date Tracking (Bahan Medis & Gigi Tiruan Resin)', 'Batch & Expiration Date Tracking (Medical & Denture Resin Materials)')}
+                    </h3>
                     <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                      Pemantauan nomor Lot/Batch dan masa berlaku bahan medis seperti akrilik, resin gigi tiruan, porselen, dan valplast (FEFO: First Expired, First Out).
+                      {tr(
+                        'Pemantauan nomor Lot/Batch dan masa berlaku bahan medis seperti akrilik, resin gigi tiruan, porselen, dan valplast (FEFO: First Expired, First Out).',
+                        'Monitoring Lot/Batch numbers and shelf-life of medical materials such as acrylic, denture resin, porcelain, and valplast (FEFO: First Expired, First Out).'
+                      )}
                     </p>
                   </div>
 
@@ -3420,14 +5275,14 @@ export function App() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                         <thead>
                           <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                            <th style={{ padding: '10px' }}>No. Batch / Lot</th>
-                            <th style={{ padding: '10px' }}>Nama Bahan / Produk</th>
+                            <th style={{ padding: '10px' }}>{tr('No. Batch / Lot', 'Batch / Lot No.')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Nama Bahan / Produk', 'Material / Product Name')}</th>
                             <th style={{ padding: '10px' }}>Supplier</th>
-                            <th style={{ padding: '10px' }}>Tanggal Masuk</th>
-                            <th style={{ padding: '10px' }}>Tanggal Kadaluarsa (Exp)</th>
-                            <th style={{ padding: '10px' }}>Sisa Stok Batch</th>
-                            <th style={{ padding: '10px' }}>Harga Batch</th>
-                            <th style={{ padding: '10px' }}>Status Exp</th>
+                            <th style={{ padding: '10px' }}>{tr('Tanggal Masuk', 'Received Date')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Tanggal Kadaluarsa (Exp)', 'Expiration Date (Exp)')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Sisa Stok Batch', 'Remaining Batch Stock')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Harga Batch', 'Batch Cost')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Status Exp', 'Expiry Status')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -3445,10 +5300,10 @@ export function App() {
                                 </td>
                                 <td style={{ padding: '12px 10px' }}>{b.item?.supplier?.name || '-'}</td>
                                 <td style={{ padding: '12px 10px', color: 'var(--text-muted)' }}>
-                                  {new Date(b.received_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                  {new Date(b.received_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
                                 </td>
                                 <td style={{ padding: '12px 10px', fontWeight: 700, color: isExpired ? '#dc2626' : isSoon ? '#d97706' : 'var(--text-main)' }}>
-                                  {exp ? exp.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Tidak Kadaluarsa'}
+                                  {exp ? exp.toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' }) : tr('Tidak Kadaluarsa', 'Non-Expiring')}
                                 </td>
                                 <td style={{ padding: '12px 10px', fontWeight: 800 }}>
                                   {b.current_quantity} / {b.initial_quantity} {b.item?.unit?.code}
@@ -3461,15 +5316,15 @@ export function App() {
                                     </span>
                                   ) : isExpired ? (
                                     <span style={{ background: '#fee2e2', color: '#dc2626', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 800 }}>
-                                      ❌ EXPIRED ({Math.abs(daysLeft!)} hr lalu)
+                                      ❌ EXPIRED ({Math.abs(daysLeft!)} {tr('hr lalu', 'd ago')})
                                     </span>
                                   ) : isSoon ? (
                                     <span style={{ background: '#fef3c7', color: '#d97706', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 800 }}>
-                                      ⏳ Segera Exp ({daysLeft} hari)
+                                      ⏳ {tr(`Segera Exp (${daysLeft} hari)`, `Expiring Soon (${daysLeft} days)`)}
                                     </span>
                                   ) : (
                                     <span style={{ background: '#ecfdf5', color: '#059669', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700 }}>
-                                      ✓ Aman ({daysLeft} hari)
+                                      ✓ {tr(`Aman (${daysLeft} hari)`, `Safe (${daysLeft} days)`)}
                                     </span>
                                   )}
                                 </td>
@@ -3490,10 +5345,13 @@ export function App() {
                     {/* Top Used Materials Card */}
                     <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                       <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
-                        🔥 Bahan Paling Sering Digunakan (Top Used Materials)
+                        🔥 {tr('Bahan Paling Sering Digunakan (Top Used Materials)', 'Top Used Materials in Production')}
                       </h3>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                        Berdasarkan frekuensi pemakaian dan total kuantitas pengeluaran produksi.
+                        {tr(
+                          'Berdasarkan frekuensi pemakaian dan total kuantitas pengeluaran produksi.',
+                          'Based on usage frequency and total production consumption quantity.'
+                        )}
                       </p>
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -3508,15 +5366,15 @@ export function App() {
                                   <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '13px' }}>{top.item_name}</span>
                                 </div>
                                 <span style={{ fontSize: '12px', fontWeight: 800, color: '#dc2626' }}>
-                                  Terpakai: {top.total_used} {top.unit_code} ({top.usage_count}x transaksi)
+                                  {tr('Terpakai:', 'Used:')} {top.total_used} {top.unit_code} ({top.usage_count}x {tr('transaksi', 'tx')})
                                 </span>
                               </div>
                               <div style={{ width: '100%', height: '7px', background: 'var(--border-light)', borderRadius: '999px', overflow: 'hidden', marginBottom: '4px' }}>
                                 <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg, #0284c7, #0d9488)', borderRadius: '999px' }} />
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                <span>Kode: {top.item_code} ({top.category})</span>
-                                <span>Nilai Pemakaian: <strong>{formatRupiah(top.total_value)}</strong></span>
+                                <span>{tr('Kode:', 'Code:')} {top.item_code} ({top.category})</span>
+                                <span>{tr('Nilai Pemakaian:', 'Usage Value:')} <strong>{formatRupiah(top.total_value)}</strong></span>
                               </div>
                             </div>
                           )
@@ -3527,20 +5385,23 @@ export function App() {
                     {/* Real-Time Stock Valuation Breakdown */}
                     <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                       <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
-                        💰 Laporan Valuasi & Stok Real-Time
+                        💰 {tr('Laporan Valuasi & Stok Real-Time', 'Real-Time Stock & Valuation Report')}
                       </h3>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                        Rincian nilai persediaan setiap bahan terhadap total nilai aset gudang ({formatRupiah(inventoryItems.reduce((a, b) => a + b.current_stock * b.purchase_price, 0))}).
+                        {tr(
+                          `Rincian nilai persediaan setiap bahan terhadap total nilai aset gudang (${formatRupiah(inventoryItems.reduce((a, b) => a + b.current_stock * b.purchase_price, 0))}).`,
+                          `Inventory valuation breakdown per material against total warehouse assets (${formatRupiah(inventoryItems.reduce((a, b) => a + b.current_stock * b.purchase_price, 0))}).`
+                        )}
                       </p>
 
                       <div className="table-responsive">
                         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '12px' }}>
                           <thead>
                             <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                              <th style={{ padding: '8px' }}>Bahan / Produk</th>
-                              <th style={{ padding: '8px' }}>Stok Real-Time</th>
-                              <th style={{ padding: '8px' }}>Harga Satuan</th>
-                              <th style={{ padding: '8px' }}>Total Nilai Stok</th>
+                              <th style={{ padding: '8px' }}>{tr('Bahan / Produk', 'Material / Product')}</th>
+                              <th style={{ padding: '8px' }}>{tr('Stok Real-Time', 'Real-Time Stock')}</th>
+                              <th style={{ padding: '8px' }}>{tr('Harga Satuan', 'Unit Price')}</th>
+                              <th style={{ padding: '8px' }}>{tr('Total Nilai Stok', 'Total Stock Value')}</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -3571,14 +5432,21 @@ export function App() {
                 <div className="animate-fade-in">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                     <div>
-                      <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>Daftar Supplier Bahan & Alat Gigi</h3>
-                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Pemasok resmi bahan akrilik, gips, logam, zirconia, dan instrumen dental lab.</p>
+                      <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>
+                        {tr('Daftar Supplier Bahan & Alat Gigi', 'Dental Material & Instrument Suppliers')}
+                      </h3>
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                        {tr(
+                          'Pemasok resmi bahan akrilik, gips, logam, zirconia, dan instrumen dental lab.',
+                          'Authorized suppliers for acrylic, gypsum, alloy, zirconia, and dental lab instruments.'
+                        )}
+                      </p>
                     </div>
                     <button
                       onClick={() => setShowSupplierModal(true)}
                       style={{ background: 'var(--primary)', color: '#ffffff', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}
                     >
-                      + Tambah Supplier
+                      {tr('+ Tambah Supplier', '+ Add Supplier')}
                     </button>
                   </div>
 
@@ -3587,12 +5455,12 @@ export function App() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                         <thead>
                           <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                            <th style={{ padding: '10px' }}>Kode</th>
-                            <th style={{ padding: '10px' }}>Nama Perusahaan Supplier</th>
-                            <th style={{ padding: '10px' }}>Kontak Person</th>
-                            <th style={{ padding: '10px' }}>No. Telepon / WA</th>
+                            <th style={{ padding: '10px' }}>{tr('Kode', 'Code')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Nama Perusahaan Supplier', 'Supplier Company Name')}</th>
+                            <th style={{ padding: '10px' }}>{tr('Kontak Person', 'Contact Person')}</th>
+                            <th style={{ padding: '10px' }}>{tr('No. Telepon / WA', 'Phone / WhatsApp')}</th>
                             <th style={{ padding: '10px' }}>Email</th>
-                            <th style={{ padding: '10px' }}>Alamat</th>
+                            <th style={{ padding: '10px' }}>{tr('Alamat', 'Address')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -3625,24 +5493,26 @@ export function App() {
 
               <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                 {purchaseRequests.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-subtle)' }}>Belum ada pengajuan pembelian bahan saat ini.</div>
+                  <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-subtle)' }}>
+                    {tr('Belum ada pengajuan pembelian bahan saat ini.', 'No material purchase requests at this time.')}
+                  </div>
                 ) : (
                   <div className="table-responsive">
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px' }}>No. PR</th>
+                          <th style={{ padding: '12px' }}>{tr('No. PR', 'PR No.')}</th>
                           <th style={{ padding: '12px' }}>{t.colDate}</th>
-                          <th style={{ padding: '12px' }}>Total Estimasi</th>
+                          <th style={{ padding: '12px' }}>{tr('Total Estimasi', 'Estimated Total')}</th>
                           <th style={{ padding: '12px' }}>{t.colStatus}</th>
-                          <th style={{ padding: '12px' }}>Aksi Owner</th>
+                          <th style={{ padding: '12px' }}>{tr('Aksi Owner', 'Owner Action')}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {purchaseRequests.map((pr) => (
                           <tr key={pr.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
                             <td style={{ padding: '12px', fontWeight: 700, color: 'var(--primary)' }}>{pr.pr_number}</td>
-                            <td style={{ padding: '12px', color: 'var(--text-muted)' }}>{new Date(pr.created_at).toLocaleDateString('id-ID')}</td>
+                            <td style={{ padding: '12px', color: 'var(--text-muted)' }}>{new Date(pr.created_at).toLocaleDateString(dateLocale)}</td>
                             <td style={{ padding: '12px', fontWeight: 700, color: 'var(--text-main)' }}>{formatRupiah(pr.total_amount)}</td>
                             <td style={{ padding: '12px' }}>
                               <span
@@ -3687,109 +5557,1043 @@ export function App() {
             </div>
           )}
 
-          {/* TAB: KEUANGAN & INVOICE */}
+          {/* TAB: PENJUALAN & KEUANGAN (INVOICE & HASIL ORDER) */}
           {activeTab === 'finance' && (
             <div className="animate-fade-in">
-              <div style={{ marginBottom: '20px' }}>
-                <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>{t.financeTitle}</h2>
-                <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>{t.financeSubtitle}</p>
-              </div>
-
-              {/* Invoices List */}
-              <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', marginBottom: '24px', boxShadow: 'var(--shadow-sm)' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '14px' }}>{t.invoicesListTitle}</h3>
-                <div className="table-responsive">
-                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                        <th style={{ padding: '12px' }}>No. Invoice</th>
-                        <th style={{ padding: '12px' }}>{t.colDoctor}</th>
-                        <th style={{ padding: '12px' }}>{t.colTotal}</th>
-                        <th style={{ padding: '12px' }}>{t.colPaid}</th>
-                        <th style={{ padding: '12px' }}>{t.colBalance}</th>
-                        <th style={{ padding: '12px' }}>{t.colStatus}</th>
-                        <th style={{ padding: '12px' }}>{t.colActions}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {invoices.map((inv) => (
-                        <tr key={inv.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                          <td style={{ padding: '12px', fontWeight: 700, color: 'var(--primary)' }}>{inv.invoice_number}</td>
-                          <td style={{ padding: '12px' }}>
-                            <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{inv.customer?.name}</div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{inv.customer?.clinic_name}</div>
-                          </td>
-                          <td style={{ padding: '12px', fontWeight: 700, color: 'var(--text-main)' }}>{formatRupiah(inv.total_amount)}</td>
-                          <td style={{ padding: '12px', color: '#16a34a' }}>{formatRupiah(inv.paid_amount)}</td>
-                          <td style={{ padding: '12px', color: inv.balance_due > 0 ? '#dc2626' : 'var(--text-muted)', fontWeight: 700 }}>
-                            {formatRupiah(inv.balance_due)}
-                          </td>
-                          <td style={{ padding: '12px' }}>
-                            <span
-                              style={{
-                                padding: '4px 8px',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 700,
-                                background: inv.status === 'PAID' ? '#ecfdf5' : '#fee2e2',
-                                color: inv.status === 'PAID' ? '#059669' : '#dc2626',
-                              }}
-                            >
-                              {inv.status}
-                            </span>
-                          </td>
-                          <td style={{ padding: '12px' }}>
-                            {inv.balance_due > 0 && (
-                              <button
-                                onClick={() => {
-                                  setSelectedInvoice(inv)
-                                  setPaymentAmount(inv.balance_due)
-                                }}
-                                style={{ background: 'var(--primary)', color: '#ffffff', padding: '6px 12px', borderRadius: '6px', fontWeight: 600, fontSize: '12px' }}
-                              >
-                                {t.recordPaymentBtn}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    {tr('Penjualan & Keuangan (Invoice & Hasil Order)', 'Sales & Finance (Invoices & Order Results)')}
+                  </h2>
+                  <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
+                    {tr(
+                      'Mencatat seluruh transaksi & arus kas: invoice pembayaran otomatis dari hasil produksi SPK, laporan penjualan harian/bulanan (omzet, laba kotor, pelanggan aktif), pengeluaran biaya produksi (bahan, tenaga kerja, operasional), dan history order pelanggan.',
+                      'Track all transactions & cash flow: automated billing invoices from SPK production results, daily/monthly sales reports (revenue, gross profit, active customers), production expenses (materials, labor, operations), and customer order history.'
+                    )}
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={handleSyncInvoices}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'var(--bg-card)',
+                      color: 'var(--primary)',
+                      border: '1.5px solid var(--primary)',
+                      padding: '9px 14px',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <RefreshCw size={15} /> {tr('Sinkronkan Invoice dari Produksi', 'Sync Invoices from Production')}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setExpCategoryId(expenseCategories[0]?.id || 1)
+                      setExpDate(new Date().toISOString().split('T')[0])
+                      setExpAmount(250000)
+                      setExpDesc('')
+                      setShowExpenseModal(true)
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'var(--primary)',
+                      color: '#ffffff',
+                      padding: '9px 16px',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    <Plus size={15} /> {tr('Catat Pengeluaran / Biaya Produksi', 'Record Expense / Production Cost')}
+                  </button>
                 </div>
               </div>
 
-              {/* Operational Expenses List */}
-              <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
-                <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '14px' }}>{t.expensesTitle}</h3>
-                {expenses.length === 0 ? (
-                  <div style={{ color: 'var(--text-subtle)', fontSize: '13px' }}>Belum ada pengeluaran dicatat bulan ini.</div>
-                ) : (
+              {/* 4 KPI Utama Penjualan & Keuangan */}
+              <div className="grid-kpi" style={{ marginBottom: '20px' }}>
+                <div
+                  onClick={() => setFinSubTab('sales_report')}
+                  style={{ cursor: 'pointer', background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}
+                >
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '6px' }}>
+                    {tr('Omzet Penjualan (Bulanan & Harian)', 'Sales Revenue (Monthly & Daily)')}
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--primary)' }}>
+                    {formatRupiah(financeSummary?.monthly_omzet ?? invoices.reduce((acc, i) => acc + i.total_amount, 0))}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#0284c7', fontWeight: 700, marginTop: '4px' }}>
+                    {tr('Hari ini:', 'Today:')} {formatRupiah(financeSummary?.daily_omzet || 0)} • Total {financeSummary?.total_invoices_count ?? invoices.length} {tr('Invoice', 'Invoices')}
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => setFinSubTab('sales_report')}
+                  style={{ cursor: 'pointer', background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}
+                >
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '6px' }}>
+                    {tr('Laba Kotor (Gross Profit)', 'Gross Profit')}
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#16a34a' }}>
+                    {formatRupiah(financeSummary?.gross_profit || 0)}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginTop: '4px' }}>
+                    {tr('Laba Bersih Operasional:', 'Net Operating Profit:')} <strong style={{ color: '#059669' }}>{formatRupiah(financeSummary?.net_operating_profit || 0)}</strong>
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => setFinSubTab('invoices')}
+                  style={{ cursor: 'pointer', background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}
+                >
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '6px' }}>
+                    {tr('Status Tagihan Invoice (Belum Lunas)', 'Outstanding Invoice Receivables (Unpaid)')}
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#dc2626' }}>
+                    {formatRupiah(financeSummary?.total_receivables ?? invoices.reduce((acc, i) => acc + i.balance_due, 0))}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#16a34a', fontWeight: 700, marginTop: '4px' }}>
+                    {tr('Sudah Terbayar (Kas Masuk):', 'Paid (Cash In):')} {formatRupiah(financeSummary?.total_paid ?? invoices.reduce((acc, i) => acc + i.paid_amount, 0))}
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => setFinSubTab('customers')}
+                  style={{ cursor: 'pointer', background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}
+                >
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '6px' }}>
+                    {tr('Pelanggan Aktif (Dokter / Klinik)', 'Active Customers (Dentists / Clinics)')}
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#7c3aed' }}>
+                    {financeSummary?.active_customers_count || customers.length} {tr('Dokter', 'Dentists')}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 700, marginTop: '4px' }}>
+                    {tr(
+                      `Total ${financeSummary?.total_customers_count || customers.length} Mitra Terdaftar • Lihat History Order →`,
+                      `Total ${financeSummary?.total_customers_count || customers.length} Registered Partners • View Order History →`
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Sub-Tab Navigasi Penjualan & Keuangan */}
+              <div className="tabs-scrollable" style={{ marginBottom: '18px' }}>
+                {[
+                  { key: 'invoices', label: tr(`🧾 Invoice Pembayaran & Hasil Order (${invoices.length})`, `🧾 Payment Invoices & Order Results (${invoices.length})`) },
+                  { key: 'sales_report', label: tr(`📈 Laporan Penjualan Harian & Bulanan`, `📈 Daily & Monthly Sales Report`) },
+                  { key: 'expenses', label: tr(`💸 Pengeluaran & Biaya Produksi (${expenses.length})`, `💸 Expenses & Production Costs (${expenses.length})`) },
+                  { key: 'customers', label: tr(`🏥 Data Pelanggan & History Order (${customers.length})`, `🏥 Customer Directory & Order History (${customers.length})`) },
+                ].map((st) => (
+                  <button
+                    key={st.key}
+                    onClick={() => setFinSubTab(st.key as any)}
+                    style={{
+                      padding: '10px 18px',
+                      borderRadius: '10px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                      background: finSubTab === st.key ? 'var(--primary)' : 'var(--bg-card)',
+                      color: finSubTab === st.key ? '#ffffff' : 'var(--text-muted)',
+                      border: finSubTab === st.key ? 'none' : '1px solid var(--border-light)',
+                      boxShadow: finSubTab === st.key ? 'var(--shadow-sm)' : 'none',
+                    }}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* SUB-TAB 1: INVOICE PEMBAYARAN & HASIL ORDER (INTEGRASI PRODUKSI) */}
+              {finSubTab === 'invoices' && (
+                <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                  {/* Banner Integrasi Produksi -> Invoice Otomatis */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '12px 16px',
+                      borderRadius: '12px',
+                      background: '#eff6ff',
+                      border: '1px solid #bfdbfe',
+                      marginBottom: '16px',
+                      flexWrap: 'wrap',
+                      gap: '10px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#1e40af' }}>
+                        ⚡ {tr('Integrasi Otomatis dengan Produksi & Hasil Order (SPK & QC)', 'Automated Integration with Production & Order Results (SPK & QC)')}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#1e3a8a' }}>
+                        {lang === 'en' ? (
+                          <>
+                            Every Production SPK that <strong>Passes QC / Completes Production (COMPLETED)</strong> automatically generates a <strong>Payment Invoice</strong> with attached <strong>Order Result & QC Report</strong>.
+                          </>
+                        ) : (
+                          <>
+                            Setiap SPK Produksi yang <strong>Lolos QC / Selesai Produksi (COMPLETED)</strong> otomatis dibuatkan <strong>Invoice Pembayaran</strong> beserta lampiran <strong>Hasil Order & QC Report</strong>.
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        placeholder={tr('Cari No. Invoice, Dokter, Pasien, SPK...', 'Search Invoice No., Dentist, Patient, SPK...')}
+                        value={finInvoiceSearch}
+                        onChange={(e) => setFinInvoiceSearch(e.target.value)}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-light)',
+                          fontSize: '12px',
+                          background: 'var(--bg-card)',
+                          color: 'var(--text-main)',
+                          minWidth: '220px',
+                        }}
+                      />
+                      <select
+                        value={finInvoiceStatusFilter}
+                        onChange={(e) => setFinInvoiceStatusFilter(e.target.value)}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border-light)',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          background: 'var(--bg-card)',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        <option value="">{tr('Semua Status Pembayaran', 'All Payment Statuses')}</option>
+                        <option value="UNPAID">{tr('BELUM LUNAS (UNPAID)', 'UNPAID')}</option>
+                        <option value="PARTIALLY_PAID">{tr('CICILAN (PARTIALLY PAID)', 'PARTIALLY PAID')}</option>
+                        <option value="PAID">{tr('LUNAS (PAID)', 'PAID')}</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Daftar SPK yang belum ada invoice (jika ada order yang masih proses tapi ingin dibuatkan invoice lebih awal) */}
+                  {(() => {
+                    const uninvoicedOrders = orders.filter(
+                      (o) => !invoices.some((inv) => inv.production_order_id === o.id || inv.production_order?.id === o.id)
+                    )
+                    if (uninvoicedOrders.length === 0) return null
+                    return (
+                      <div
+                        style={{
+                          padding: '10px 14px',
+                          borderRadius: '10px',
+                          background: 'var(--bg-surface)',
+                          border: '1px dashed var(--border-light)',
+                          marginBottom: '16px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: '10px',
+                        }}
+                      >
+                        <div style={{ fontSize: '12px', color: 'var(--text-main)' }}>
+                          📌 {tr('Terdapat', 'There are')} <strong>{uninvoicedOrders.length} {tr('SPK Aktif', 'Active SPK Orders')}</strong> {tr('dalam proses produksi yang belum diterbitkan tagihan awal:', 'in production without an initial invoice:')}{' '}
+                          {uninvoicedOrders.slice(0, 3).map((uo) => (
+                            <span key={uo.id} style={{ marginRight: '8px', fontWeight: 700, color: 'var(--primary)' }}>
+                              {uo.order_number} ({uo.patient_name} - {formatRupiah(uo.total_price)})
+                            </span>
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {uninvoicedOrders.slice(0, 2).map((uo) => (
+                            <button
+                              key={uo.id}
+                              onClick={() => handleCreateInvoice(uo.id)}
+                              style={{
+                                padding: '5px 10px',
+                                background: '#0284c7',
+                                color: '#ffffff',
+                                borderRadius: '6px',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                              }}
+                            >
+                              {tr(`+ Buat Invoice ${uo.order_number}`, `+ Create Invoice ${uo.order_number}`)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   <div className="table-responsive">
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px' }}>No. Biaya</th>
-                          <th style={{ padding: '12px' }}>Kategori</th>
-                          <th style={{ padding: '12px' }}>Keterangan</th>
-                          <th style={{ padding: '12px' }}>Jumlah Biaya</th>
-                          <th style={{ padding: '12px' }}>{t.colDate}</th>
+                          <th style={{ padding: '12px' }}>{tr('No. Invoice & Tgl', 'Invoice No. & Date')}</th>
+                          <th style={{ padding: '12px' }}>{tr('Pelanggan (Dokter / Klinik)', 'Customer (Dentist / Clinic)')}</th>
+                          <th style={{ padding: '12px' }}>{tr('Hasil Order Produksi & QC', 'Production Order Result & QC')}</th>
+                          <th style={{ padding: '12px' }}>{tr('Informasi Tagihan', 'Billing Details')}</th>
+                          <th style={{ padding: '12px' }}>{tr('Status Pembayaran', 'Payment Status')}</th>
+                          <th style={{ padding: '12px' }}>{tr('Aksi', 'Action')}</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {expenses.map((e) => (
-                          <tr key={e.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
-                            <td style={{ padding: '12px', fontWeight: 700, color: 'var(--primary)' }}>{e.expense_number}</td>
-                            <td style={{ padding: '12px', color: 'var(--text-main)' }}>{e.category?.name}</td>
-                            <td style={{ padding: '12px', color: 'var(--text-muted)' }}>{e.description}</td>
-                            <td style={{ padding: '12px', fontWeight: 700, color: '#dc2626' }}>{formatRupiah(e.amount)}</td>
-                            <td style={{ padding: '12px', color: 'var(--text-muted)' }}>{new Date(e.expense_date).toLocaleDateString('id-ID')}</td>
-                          </tr>
-                        ))}
+                        {invoices
+                          .filter((inv) => {
+                            if (finInvoiceStatusFilter && inv.status !== finInvoiceStatusFilter) return false
+                            if (!finInvoiceSearch.trim()) return true
+                            const q = finInvoiceSearch.toLowerCase()
+                            const orderObj = inv.production_order || orders.find((o) => o.id === inv.production_order_id)
+                            return (
+                              inv.invoice_number.toLowerCase().includes(q) ||
+                              (inv.customer?.name || '').toLowerCase().includes(q) ||
+                              (inv.customer?.clinic_name || '').toLowerCase().includes(q) ||
+                              (orderObj?.order_number || '').toLowerCase().includes(q) ||
+                              (orderObj?.patient_name || '').toLowerCase().includes(q)
+                            )
+                          })
+                          .map((inv) => {
+                            const orderObj = inv.production_order || orders.find((o) => o.id === inv.production_order_id)
+                            const qcPassedObj = orderObj?.quality_checks?.find((q) => q.passed)
+                            return (
+                              <tr key={inv.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <div style={{ fontWeight: 800, color: 'var(--primary)', fontSize: '14px' }}>{inv.invoice_number}</div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                    {tr('Terbit:', 'Issued:')} {new Date(inv.issue_date).toLocaleDateString(dateLocale)}
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    {tr('Jatuh Tempo:', 'Due Date:')} {new Date(inv.due_date).toLocaleDateString(dateLocale)}
+                                  </div>
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      marginTop: '4px',
+                                      padding: '2px 6px',
+                                      borderRadius: '4px',
+                                      fontSize: '10px',
+                                      fontWeight: 700,
+                                      background: '#e0f2fe',
+                                      color: '#0369a1',
+                                    }}
+                                  >
+                                    ⚡ {tr('Auto-Sync Produksi', 'Production Auto-Sync')}
+                                  </span>
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{inv.customer?.name || '-'}</div>
+                                  <div style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 600 }}>{inv.customer?.clinic_name || '-'}</div>
+                                  {inv.customer?.phone && (
+                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>📱 {inv.customer.phone}</div>
+                                  )}
+                                  {inv.customer?.address && (
+                                    <div style={{ fontSize: '11px', color: 'var(--text-subtle)', maxWidth: '210px' }}>📍 {inv.customer.address}</div>
+                                  )}
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  {orderObj ? (
+                                    <div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                        <span style={{ fontWeight: 800, color: 'var(--text-main)' }}>{orderObj.order_number}</span>
+                                        <span
+                                          style={{
+                                            padding: '2px 7px',
+                                            borderRadius: '999px',
+                                            fontSize: '10px',
+                                            fontWeight: 800,
+                                            background:
+                                              orderObj.status === 'COMPLETED' || orderObj.status === 'DELIVERED' ? '#dcfce7' : '#fef3c7',
+                                            color:
+                                              orderObj.status === 'COMPLETED' || orderObj.status === 'DELIVERED' ? '#15803d' : '#b45309',
+                                          }}
+                                        >
+                                          {orderObj.status === 'DELIVERED'
+                                            ? tr('🚚 DIKIRIM', '🚚 DELIVERED')
+                                            : orderObj.status === 'COMPLETED'
+                                            ? tr('✓ SELESAI PRODUKSI', '✓ COMPLETED')
+                                            : orderObj.status}
+                                        </span>
+                                      </div>
+                                      <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)', marginTop: '3px' }}>
+                                        {tr('Pasien:', 'Patient:')} {orderObj.patient_name}
+                                      </div>
+                                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                        🦷 {orderObj.denture_type?.name || inv.items?.[0]?.description || tr('Restorasi Gigi Tiruan', 'Denture Restoration')}
+                                      </div>
+                                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                        {tr('Elemen:', 'Teeth:')} <strong>{orderObj.teeth_numbers}</strong> • Shade: <strong>{orderObj.shade_guide || 'A2'}</strong>
+                                      </div>
+                                      {qcPassedObj && (
+                                        <div style={{ fontSize: '10px', color: '#059669', fontWeight: 700, marginTop: '3px' }}>
+                                          ✓ {tr('Lolos QC:', 'QC Passed:')} {qcPassedObj.defect_notes || tr('Presisi & Estetika Terverifikasi', 'Precision & Aesthetics Verified')}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                                      {inv.items?.[0]?.description || tr('Tagihan Produksi Gigi Tiruan', 'Denture Production Invoice')}
+                                    </div>
+                                  )}
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    Subtotal: {formatRupiah(inv.subtotal || inv.total_amount)}
+                                  </div>
+                                  {inv.discount_amount > 0 && (
+                                    <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 600 }}>
+                                      {tr('Diskon Loyalty:', 'Loyalty Discount:')} -{formatRupiah(inv.discount_amount)}
+                                    </div>
+                                  )}
+                                  <div style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '14px', marginTop: '2px' }}>
+                                    Total: {formatRupiah(inv.total_amount)}
+                                  </div>
+                                  <div style={{ fontSize: '11px', color: '#16a34a', fontWeight: 700, marginTop: '2px' }}>
+                                    {tr('Dibayar:', 'Paid:')} {formatRupiah(inv.paid_amount)}
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: '12px',
+                                      color: inv.balance_due > 0 ? '#dc2626' : '#059669',
+                                      fontWeight: 800,
+                                    }}
+                                  >
+                                    {tr('Sisa:', 'Balance:')} {formatRupiah(inv.balance_due)}
+                                  </div>
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <span
+                                    style={{
+                                      display: 'inline-block',
+                                      padding: '5px 10px',
+                                      borderRadius: '999px',
+                                      fontSize: '11px',
+                                      fontWeight: 800,
+                                      background:
+                                        inv.status === 'PAID'
+                                          ? '#dcfce7'
+                                          : inv.status === 'PARTIALLY_PAID'
+                                          ? '#fef3c7'
+                                          : '#fee2e2',
+                                      color:
+                                        inv.status === 'PAID'
+                                          ? '#15803d'
+                                          : inv.status === 'PARTIALLY_PAID'
+                                          ? '#b45309'
+                                          : '#dc2626',
+                                    }}
+                                  >
+                                    {inv.status === 'PAID'
+                                      ? tr('✓ LUNAS (PAID)', '✓ PAID')
+                                      : inv.status === 'PARTIALLY_PAID'
+                                      ? tr('⏳ CICILAN (PARTIAL)', '⏳ PARTIALLY PAID')
+                                      : tr('❗ BELUM LUNAS', '❗ UNPAID')}
+                                  </span>
+                                  {inv.payments && inv.payments.length > 0 && (
+                                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                                      {inv.payments.length}x {tr('riwayat bayar', 'payments')} ({inv.payments[inv.payments.length - 1].payment_method})
+                                    </div>
+                                  )}
+                                </td>
+
+                                <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    <button
+                                      onClick={() => setViewingInvoice(inv)}
+                                      style={{
+                                        background: 'var(--bg-surface)',
+                                        color: 'var(--primary)',
+                                        border: '1px solid var(--primary)',
+                                        padding: '6px 10px',
+                                        borderRadius: '6px',
+                                        fontWeight: 700,
+                                        fontSize: '11px',
+                                        textAlign: 'center',
+                                      }}
+                                    >
+                                      📄 {tr('Nota & Hasil Order', 'Invoice & Order Result')}
+                                    </button>
+                                    {inv.balance_due > 0 && (
+                                      <button
+                                        onClick={() => {
+                                          setSelectedInvoice(inv)
+                                          setPaymentAmount(inv.balance_due)
+                                        }}
+                                        style={{
+                                          background: 'var(--primary)',
+                                          color: '#ffffff',
+                                          padding: '6px 10px',
+                                          borderRadius: '6px',
+                                          fontWeight: 700,
+                                          fontSize: '11px',
+                                          textAlign: 'center',
+                                        }}
+                                      >
+                                        💳 {t.recordPaymentBtn}
+                                      </button>
+                                    )}
+                                    {inv.customer?.phone && (
+                                      <button
+                                        onClick={() => {
+                                          const msg = `Halo ${inv.customer?.name}, berikut informasi tagihan & hasil order Dental Lab:\nNo. Invoice: *${inv.invoice_number}*\nNo. SPK: *${orderObj?.order_number || '-'}* (Pasien: ${orderObj?.patient_name || '-'})\nTotal Tagihan: *${formatRupiah(inv.total_amount)}*\nSisa Tagihan: *${formatRupiah(inv.balance_due)}* (${inv.status === 'PAID' ? 'LUNAS' : 'BELUM LUNAS'}).\nTerima kasih dokter!`
+                                          openWhatsApp(inv.customer.phone, msg)
+                                        }}
+                                        style={{
+                                          background: '#ecfdf5',
+                                          color: '#059669',
+                                          border: '1px solid #a7f3d0',
+                                          padding: '5px 10px',
+                                          borderRadius: '6px',
+                                          fontWeight: 700,
+                                          fontSize: '11px',
+                                        }}
+                                      >
+                                        💬 {tr('Kirim WA Tagihan', 'Send WhatsApp Bill')}
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
                       </tbody>
                     </table>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
+
+              {/* SUB-TAB 2: LAPORAN PENJUALAN HARIAN & BULANAN (OMZET, LABA KOTOR, PELANGGAN AKTIF) */}
+              {finSubTab === 'sales_report' && (
+                <div>
+                  {/* Kartu Perhitungan Laba Kotor (Gross Profit) & Laba Bersih */}
+                  <div
+                    style={{
+                      background: 'var(--bg-card)',
+                      borderRadius: '16px',
+                      border: '1px solid var(--border-light)',
+                      padding: '20px',
+                      marginBottom: '20px',
+                      boxShadow: 'var(--shadow-sm)',
+                    }}
+                  >
+                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '6px' }}>
+                      📊 {tr('Ringkasan Laporan Penjualan, Laba Kotor (Gross Profit) & Arus Kas', 'Sales Report Summary, Gross Profit & Cash Flow')}
+                    </h3>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                      {tr(
+                        'Perhitungan otomatis dari seluruh tagihan produksi (Omzet) dikurangi Biaya Produksi (Bahan + Tenaga Kerja) dan Biaya Operasional.',
+                        'Automatically calculated from total production invoices (Revenue) minus Production Costs (Materials + Labor) and Operating Expenses.'
+                      )}
+                    </p>
+
+                    <div className="grid-kpi">
+                      <div style={{ padding: '14px', borderRadius: '12px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)' }}>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>
+                          {tr('1. Total Omzet Penjualan', '1. Total Sales Revenue')}
+                        </div>
+                        <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--primary)', marginTop: '4px' }}>
+                          {formatRupiah(financeSummary?.total_invoiced || 0)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          {tr('Bulan Ini:', 'This Month:')} <strong>{formatRupiah(financeSummary?.monthly_omzet || 0)}</strong>
+                        </div>
+                      </div>
+
+                      <div style={{ padding: '14px', borderRadius: '12px', background: '#fff7ed', border: '1px solid #fed7aa' }}>
+                        <div style={{ fontSize: '11px', color: '#9a3412', fontWeight: 700 }}>
+                          {tr('2. HPP (Bahan + Tenaga Kerja)', '2. COGS (Materials + Labor)')}
+                        </div>
+                        <div style={{ fontSize: '20px', fontWeight: 800, color: '#ea580c', marginTop: '4px' }}>
+                          -{formatRupiah((financeSummary?.material_cost || 0) + (financeSummary?.labor_cost || 0))}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#9a3412', marginTop: '4px' }}>
+                          {tr('Bahan:', 'Materials:')} {formatRupiah(financeSummary?.material_cost || 0)} • {tr('SDM:', 'Labor:')} {formatRupiah(financeSummary?.labor_cost || 0)}
+                        </div>
+                      </div>
+
+                      <div style={{ padding: '14px', borderRadius: '12px', background: '#ecfdf5', border: '1px solid #a7f3d0' }}>
+                        <div style={{ fontSize: '11px', color: '#065f46', fontWeight: 700 }}>
+                          {tr('3. Laba Kotor (Gross Profit)', '3. Gross Profit')}
+                        </div>
+                        <div style={{ fontSize: '20px', fontWeight: 800, color: '#059669', marginTop: '4px' }}>
+                          {formatRupiah(financeSummary?.gross_profit || 0)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#047857', marginTop: '4px' }}>
+                          {tr('Margin Kotor:', 'Gross Margin:')}{' '}
+                          <strong>
+                            {financeSummary && financeSummary.total_invoiced > 0
+                              ? `${Math.round((financeSummary.gross_profit / financeSummary.total_invoiced) * 100)}%`
+                              : '0%'}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div style={{ padding: '14px', borderRadius: '12px', background: '#f5f3ff', border: '1px solid #ddd6fe' }}>
+                        <div style={{ fontSize: '11px', color: '#5b21b6', fontWeight: 700 }}>
+                          {tr('4. Laba Bersih & Pelanggan Aktif', '4. Net Profit & Active Customers')}
+                        </div>
+                        <div style={{ fontSize: '20px', fontWeight: 800, color: '#6d28d9', marginTop: '4px' }}>
+                          {formatRupiah(financeSummary?.net_operating_profit || 0)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#5b21b6', marginTop: '4px' }}>
+                          {tr('Pelanggan Aktif:', 'Active Customers:')} <strong>{financeSummary?.active_customers_count || customers.length} {tr('Dokter/Klinik', 'Dentists/Clinics')}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tabel Penjualan Harian & Bulanan */}
+                  <div className="grid-2col" style={{ gap: '20px' }}>
+                    {/* Tabel Laporan Penjualan Harian */}
+                    <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
+                        📅 {tr('Laporan Penjualan Harian', 'Daily Sales Report')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                        {tr('Rekapitulasi omzet harian, jumlah SPK/Invoice, dan pelanggan aktif per hari.', 'Daily revenue breakdown, SPK/Invoice count, and active customers per day.')}
+                      </p>
+                      <div className="table-responsive">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '12px' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                              <th style={{ padding: '10px' }}>{tr('Tanggal', 'Date')}</th>
+                              <th style={{ padding: '10px' }}>{tr('Order & Dokter Aktif', 'Orders & Active Dentists')}</th>
+                              <th style={{ padding: '10px' }}>{tr('Omzet Harian', 'Daily Revenue')}</th>
+                              <th style={{ padding: '10px' }}>{tr('Terbayar', 'Paid')}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(financeSummary?.daily_breakdown || []).map((d) => (
+                              <tr key={d.period} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                <td style={{ padding: '10px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                  {new Date(d.period).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                </td>
+                                <td style={{ padding: '10px', color: 'var(--text-muted)' }}>
+                                  <strong>{d.orders_count}</strong> {tr('Order', 'Orders')} • <strong>{d.active_customers}</strong> {tr('Dokter', 'Dentists')}
+                                </td>
+                                <td style={{ padding: '10px', fontWeight: 800, color: 'var(--primary)' }}>{formatRupiah(d.omzet)}</td>
+                                <td style={{ padding: '10px', fontWeight: 700, color: '#16a34a' }}>{formatRupiah(d.paid_amount)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Tabel Laporan Penjualan Bulanan */}
+                    <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
+                        🗓️ {tr('Laporan Penjualan Bulanan', 'Monthly Sales Report')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                        {tr('Rekapitulasi omzet bulanan, penerimaan kas, piutang, dan jumlah pelanggan aktif.', 'Monthly revenue summary, cash receipts, receivables, and active customer count.')}
+                      </p>
+                      <div className="table-responsive">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '12px' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                              <th style={{ padding: '10px' }}>{tr('Periode Bulan', 'Month Period')}</th>
+                              <th style={{ padding: '10px' }}>{tr('Order & Pelanggan Aktif', 'Orders & Active Customers')}</th>
+                              <th style={{ padding: '10px' }}>{tr('Omzet Bulanan', 'Monthly Revenue')}</th>
+                              <th style={{ padding: '10px' }}>{tr('Sisa Piutang', 'Unpaid Balance')}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(financeSummary?.monthly_breakdown || []).map((m) => (
+                              <tr key={m.period} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                <td style={{ padding: '10px', fontWeight: 800, color: 'var(--primary)' }}>{m.period}</td>
+                                <td style={{ padding: '10px', color: 'var(--text-muted)' }}>
+                                  <strong>{m.orders_count}</strong> {tr('Order', 'Orders')} • <strong>{m.active_customers}</strong> {tr('Dokter Aktif', 'Active Dentists')}
+                                </td>
+                                <td style={{ padding: '10px', fontWeight: 800, color: 'var(--text-main)' }}>{formatRupiah(m.omzet)}</td>
+                                <td style={{ padding: '10px', fontWeight: 700, color: m.unpaid_amount > 0 ? '#dc2626' : '#059669' }}>
+                                  {formatRupiah(m.unpaid_amount)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SUB-TAB 3: PENGELUARAN & BIAYA PRODUKSI (BAHAN, TENAGA KERJA, OPERASIONAL) */}
+              {finSubTab === 'expenses' && (
+                <div>
+                  {/* 3 Kartu Kategori Biaya: Bahan, Tenaga Kerja, Operasional */}
+                  <div className="grid-kpi" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: '20px' }}>
+                    <div
+                      onClick={() => setFinExpenseCatFilter(finExpenseCatFilter === 1 ? 0 : 1)}
+                      style={{
+                        cursor: 'pointer',
+                        background: 'var(--bg-card)',
+                        padding: '18px',
+                        borderRadius: '14px',
+                        border: finExpenseCatFilter === 1 ? '2px solid #0284c7' : '1px solid var(--border-light)',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#0284c7' }}>
+                        🧪 {tr('1. Biaya Bahan Produksi (RAW_MATERIAL)', '1. Production Material Cost (RAW_MATERIAL)')}
+                      </div>
+                      <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>
+                        {formatRupiah(
+                          financeSummary?.material_cost ??
+                            expenses.filter((e) => e.category?.code === 'RAW_MATERIAL' || e.category_id === 1).reduce((s, e) => s + e.amount, 0)
+                        )}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {tr('Blok Zirconia, Gips Die Stone, Ingot E-Max, Akrilik, Alloy', 'Zirconia Blocks, Die Stone Gypsum, E-Max Ingots, Acrylic, Alloy')}
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={() => setFinExpenseCatFilter(finExpenseCatFilter === 2 ? 0 : 2)}
+                      style={{
+                        cursor: 'pointer',
+                        background: 'var(--bg-card)',
+                        padding: '18px',
+                        borderRadius: '14px',
+                        border: finExpenseCatFilter === 2 ? '2px solid #d97706' : '1px solid var(--border-light)',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#d97706' }}>
+                        👨‍🔬 {tr('2. Biaya Tenaga Kerja (LABOR)', '2. Technician Labor Cost (LABOR)')}
+                      </div>
+                      <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>
+                        {formatRupiah(
+                          financeSummary?.labor_cost ??
+                            expenses.filter((e) => e.category?.code === 'LABOR' || e.category_id === 2).reduce((s, e) => s + e.amount, 0)
+                        )}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {tr('Gaji & Insentif Tekniker per Unit, Uang Lembur Produksi', 'Technician Salary & Unit Incentives, Production Overtime Pay')}
+                      </div>
+                    </div>
+
+                    <div
+                      onClick={() => setFinExpenseCatFilter(finExpenseCatFilter === 3 ? 0 : 3)}
+                      style={{
+                        cursor: 'pointer',
+                        background: 'var(--bg-card)',
+                        padding: '18px',
+                        borderRadius: '14px',
+                        border: finExpenseCatFilter === 3 ? '2px solid #7c3aed' : '1px solid var(--border-light)',
+                      }}
+                    >
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: '#7c3aed' }}>
+                        ⚡ {tr('3. Biaya Operasional Lab (OPERATIONAL)', '3. Lab Operating Expenses (OPERATIONAL)')}
+                      </div>
+                      <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>
+                        {formatRupiah(
+                          financeSummary?.operational_cost ??
+                            expenses.filter((e) => e.category?.code === 'OPERATIONAL' || e.category_id === 3).reduce((s, e) => s + e.amount, 0)
+                        )}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {tr('Listrik Furnace/CAD-CAM, Kurir Antar-Jemput, Maintenance', 'Furnace/CAD-CAM Electricity, Pickup-Delivery Courier, Maintenance')}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tabel Rincian Pengeluaran & Biaya Produksi */}
+                  <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                      <div>
+                        <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                          {tr('Buku Kas Pengeluaran & Biaya Produksi', 'Expense & Production Cost Ledger')}
+                        </h3>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          {tr(
+                            'Pencatatan biaya bahan baku, biaya tenaga kerja tekniker, dan biaya operasional harian laboratorium.',
+                            'Record raw material expenses, technician labor costs, and daily laboratory operating expenses.'
+                          )}
+                        </p>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <select
+                          value={finExpenseCatFilter}
+                          onChange={(e) => setFinExpenseCatFilter(Number(e.target.value))}
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border-light)',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            background: 'var(--bg-card)',
+                            color: 'var(--text-main)',
+                          }}
+                        >
+                          <option value={0}>{tr('Semua Kategori Biaya', 'All Expense Categories')}</option>
+                          <option value={1}>🧪 {tr('Biaya Bahan Produksi', 'Production Material Cost')}</option>
+                          <option value={2}>👨‍🔬 {tr('Biaya Tenaga Kerja', 'Technician Labor Cost')}</option>
+                          <option value={3}>⚡ {tr('Biaya Operasional Lab', 'Lab Operating Expense')}</option>
+                        </select>
+                        <button
+                          onClick={() => setShowExpenseModal(true)}
+                          style={{
+                            padding: '8px 14px',
+                            background: 'var(--primary)',
+                            color: '#ffffff',
+                            borderRadius: '8px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {tr('+ Tambah Pengeluaran', '+ Add Expense')}
+                        </button>
+                      </div>
+                    </div>
+
+                    {expenses.length === 0 ? (
+                      <div style={{ color: 'var(--text-subtle)', fontSize: '13px', padding: '24px', textAlign: 'center' }}>
+                        {tr('Belum ada pengeluaran dicatat.', 'No expenses recorded yet.')}
+                      </div>
+                    ) : (
+                      <div className="table-responsive">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                              <th style={{ padding: '12px' }}>{tr('No. Biaya', 'Expense No.')}</th>
+                              <th style={{ padding: '12px' }}>{tr('Kategori Biaya', 'Expense Category')}</th>
+                              <th style={{ padding: '12px' }}>{tr('Keterangan Pengeluaran', 'Expense Description')}</th>
+                              <th style={{ padding: '12px' }}>{tr('Tanggal', 'Date')}</th>
+                              <th style={{ padding: '12px' }}>{tr('Nominal Biaya', 'Amount')}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {expenses
+                              .filter((e) => (finExpenseCatFilter === 0 ? true : e.category_id === finExpenseCatFilter))
+                              .map((e) => {
+                                const code = e.category?.code || (e.category_id === 1 ? 'RAW_MATERIAL' : e.category_id === 2 ? 'LABOR' : 'OPERATIONAL')
+                                return (
+                                  <tr key={e.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                    <td style={{ padding: '12px', fontWeight: 800, color: 'var(--primary)' }}>{e.expense_number}</td>
+                                    <td style={{ padding: '12px' }}>
+                                      <span
+                                        style={{
+                                          padding: '4px 9px',
+                                          borderRadius: '999px',
+                                          fontSize: '11px',
+                                          fontWeight: 800,
+                                          background:
+                                            code === 'RAW_MATERIAL'
+                                              ? '#e0f2fe'
+                                              : code === 'LABOR'
+                                              ? '#fef3c7'
+                                              : '#f3e8ff',
+                                          color:
+                                            code === 'RAW_MATERIAL'
+                                              ? '#0369a1'
+                                              : code === 'LABOR'
+                                              ? '#b45309'
+                                              : '#6d28d9',
+                                        }}
+                                      >
+                                        {code === 'RAW_MATERIAL'
+                                          ? tr('🧪 Biaya Bahan', '🧪 Material Cost')
+                                          : code === 'LABOR'
+                                          ? tr('👨‍🔬 Tenaga Kerja', '👨‍🔬 Labor Cost')
+                                          : tr('⚡ Operasional', '⚡ Operating')}
+                                      </span>
+                                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                                        {e.category?.name}
+                                      </div>
+                                    </td>
+                                    <td style={{ padding: '12px', color: 'var(--text-main)', fontWeight: 600 }}>{e.description}</td>
+                                    <td style={{ padding: '12px', color: 'var(--text-muted)' }}>
+                                      {new Date(e.expense_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
+                                    </td>
+                                    <td style={{ padding: '12px', fontWeight: 800, color: '#dc2626' }}>{formatRupiah(e.amount)}</td>
+                                  </tr>
+                                )
+                              })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* SUB-TAB 4: DATA PELANGGAN (DOKTER / KLINIK) & HISTORY ORDER KEUANGAN */}
+              {finSubTab === 'customers' && (
+                <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        🏥 {tr('Data Pelanggan (Dokter / Klinik) & History Order Transaksi', 'Customer Directory (Dentists / Clinics) & Transaction Order History')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr(
+                          'Informasi lengkap nama dokter/klinik, No. HP, alamat pengiriman, daftar history order SPK, serta total tagihan & pembayaran.',
+                          'Complete dentist/clinic details, phone number, delivery address, SPK order history list, and total billing & payments.'
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      onClick={openCreateCustomerModal}
+                      style={{
+                        padding: '8px 14px',
+                        background: 'var(--primary)',
+                        color: '#ffffff',
+                        borderRadius: '8px',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {tr('+ Tambah Pelanggan (Dokter/Klinik)', '+ Add Customer (Dentist/Clinic)')}
+                    </button>
+                  </div>
+
+                  <div className="table-responsive">
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                          <th style={{ padding: '12px' }}>{tr('Nama Dokter & Klinik', 'Dentist & Clinic Name')}</th>
+                          <th style={{ padding: '12px' }}>{tr('No. HP & Alamat Lengkap', 'Phone & Full Address')}</th>
+                          <th style={{ padding: '12px' }}>{tr('History Order Produksi (SPK)', 'Production Order History (SPK)')}</th>
+                          <th style={{ padding: '12px' }}>{tr('Rekap Tagihan & Pembayaran', 'Billing & Payment Summary')}</th>
+                          <th style={{ padding: '12px' }}>{tr('Aksi', 'Action')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {customers.map((c) => {
+                          const custOrders = orders.filter((o) => o.customer_id === c.id)
+                          const custInvoices = invoices.filter((i) => i.customer_id === c.id)
+                          const totalBilled = custInvoices.reduce((s, i) => s + i.total_amount, 0)
+                          const totalPaid = custInvoices.reduce((s, i) => s + i.paid_amount, 0)
+                          const totalDue = custInvoices.reduce((s, i) => s + i.balance_due, 0)
+
+                          return (
+                            <tr key={c.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                              <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>{c.name}</div>
+                                <div style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 700 }}>{c.clinic_name || '-'}</div>
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    marginTop: '4px',
+                                    padding: '2px 7px',
+                                    borderRadius: '999px',
+                                    fontSize: '10px',
+                                    fontWeight: 800,
+                                    background: '#f3e8ff',
+                                    color: '#6d28d9',
+                                  }}
+                                >
+                                  {c.loyalty_tier || 'REGULAR'} • {tr('Diskon', 'Discount')} {c.discount_percent || 0}%
+                                </span>
+                              </td>
+
+                              <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                <div style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '12px' }}>📱 {c.phone || '-'}</div>
+                                {c.email && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>✉️ {c.email}</div>}
+                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px', maxWidth: '240px' }}>
+                                  📍 {c.address || tr('Alamat klinik belum diisi', 'Clinic address not set')}
+                                </div>
+                              </td>
+
+                              <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                <div style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '12px', marginBottom: '4px' }}>
+                                  📋 {custOrders.length} {tr('History Order SPK:', 'SPK Order History:')}
+                                </div>
+                                {custOrders.length === 0 ? (
+                                  <div style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>
+                                    {tr('Belum ada riwayat order', 'No order history yet')}
+                                  </div>
+                                ) : (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    {custOrders.slice(0, 3).map((co) => (
+                                      <div
+                                        key={co.id}
+                                        style={{
+                                          fontSize: '11px',
+                                          padding: '4px 8px',
+                                          borderRadius: '6px',
+                                          background: 'var(--bg-surface)',
+                                          border: '1px solid var(--border-light)',
+                                        }}
+                                      >
+                                        <strong style={{ color: 'var(--primary)' }}>{co.order_number}</strong> • {tr('Pasien:', 'Patient:')} <strong>{co.patient_name}</strong> ({co.denture_type?.name || tr('Gigi Tiruan', 'Denture')}) —{' '}
+                                        <span style={{ fontWeight: 700, color: co.status === 'COMPLETED' || co.status === 'DELIVERED' ? '#16a34a' : '#d97706' }}>
+                                          {co.status}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+
+                              <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                <div style={{ fontSize: '12px', color: 'var(--text-main)' }}>
+                                  {tr('Total Tagihan:', 'Total Billed:')} <strong>{formatRupiah(totalBilled)}</strong>
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#16a34a', fontWeight: 700 }}>
+                                  {tr('Sudah Lunas:', 'Total Paid:')} {formatRupiah(totalPaid)}
+                                </div>
+                                <div style={{ fontSize: '12px', color: totalDue > 0 ? '#dc2626' : '#059669', fontWeight: 800 }}>
+                                  {tr('Sisa Piutang:', 'Balance Due:')} {formatRupiah(totalDue)}
+                                </div>
+                              </td>
+
+                              <td style={{ padding: '12px', verticalAlign: 'top' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  <button
+                                    onClick={() => openEditCustomerModal(c)}
+                                    style={{
+                                      padding: '5px 10px',
+                                      background: 'var(--bg-surface)',
+                                      color: 'var(--text-main)',
+                                      border: '1px solid var(--border-light)',
+                                      borderRadius: '6px',
+                                      fontSize: '11px',
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    ✏️ {tr('Edit Data Dokter', 'Edit Dentist Info')}
+                                  </button>
+                                  {c.phone && (
+                                    <button
+                                      onClick={() =>
+                                        openWhatsApp(
+                                          c.phone,
+                                          `Halo ${c.name} (${c.clinic_name || 'Klinik'}), berikut rekap transaksi Dental Lab: Total Order ${custOrders.length} SPK, Sisa Tagihan: ${formatRupiah(totalDue)}.`
+                                        )
+                                      }
+                                      style={{
+                                        padding: '5px 10px',
+                                        background: '#ecfdf5',
+                                        color: '#059669',
+                                        border: '1px solid #a7f3d0',
+                                        borderRadius: '6px',
+                                        fontSize: '11px',
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      💬 {tr('Hubungi WA', 'Contact WhatsApp')}
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -3799,10 +6603,13 @@ export function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
                   <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>
-                    Master Dokter & Pasien (CRM Pelanggan)
+                    {tr('Master Dokter & Pasien (CRM Pelanggan)', 'Dentist & Patient Master (CRM)')}
                   </h2>
                   <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
-                    Database dokter/klinik (kontak, preferensi, catatan khusus), master data pasien, history order & feedback, reminder follow-up order, serta sistem loyalty/diskon otomatis.
+                    {tr(
+                      'Database dokter/klinik (kontak, preferensi, catatan khusus), master data pasien, history order & feedback, reminder follow-up order, serta sistem loyalty/diskon otomatis.',
+                      'Dentist/clinic database (contacts, preferences, special notes), patient master directory, order history & feedback, follow-up reminders, and automatic loyalty discount system.'
+                    )}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -3810,13 +6617,13 @@ export function App() {
                     onClick={() => openCreatePatientModal()}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-card)', color: 'var(--primary)', border: '1.5px solid var(--primary)', padding: '9px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}
                   >
-                    <Plus size={15} /> Tambah Master Pasien
+                    <Plus size={15} /> {tr('Tambah Master Pasien', 'Add Patient Master')}
                   </button>
                   <button
                     onClick={openCreateCustomerModal}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--primary)', color: '#ffffff', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}
                   >
-                    <Plus size={15} /> Tambah Master Dokter / Klinik
+                    <Plus size={15} /> {tr('Tambah Master Dokter / Klinik', 'Add Dentist / Clinic')}
                   </button>
                 </div>
               </div>
@@ -3827,50 +6634,50 @@ export function App() {
                   onClick={() => setCrmSubTab('doctors')}
                   style={{ background: 'var(--bg-card)', borderRadius: '14px', padding: '16px 18px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)', cursor: 'pointer' }}
                 >
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Master Dokter & Klinik</div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>{customers.length} Mitra</div>
-                  <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600, marginTop: '4px' }}>Kontak, Preferensi & Catatan Khusus</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Master Dokter & Klinik', 'Dentist & Clinic Master')}</div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>{customers.length} {tr('Mitra', 'Partners')}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600, marginTop: '4px' }}>{tr('Kontak, Preferensi & Catatan Khusus', 'Contacts, Preferences & Notes')}</div>
                 </div>
 
                 <div
                   onClick={() => setCrmSubTab('patients')}
                   style={{ background: 'var(--bg-card)', borderRadius: '14px', padding: '16px 18px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)', cursor: 'pointer' }}
                 >
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Master Data Pasien</div>
-                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>{patients.length} Pasien</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-subtle)', marginTop: '4px' }}>Terintegrasi langsung ke Input SPK</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Master Data Pasien', 'Patient Master Data')}</div>
+                  <div style={{ fontSize: '24px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>{patients.length} {tr('Pasien', 'Patients')}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-subtle)', marginTop: '4px' }}>{tr('Terintegrasi langsung ke Input SPK', 'Directly integrated with New SPK')}</div>
                 </div>
 
                 <div
                   onClick={() => setCrmSubTab('reminders')}
                   style={{ background: 'var(--bg-card)', borderRadius: '14px', padding: '16px 18px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)', cursor: 'pointer' }}
                 >
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Reminder Follow-Up Order</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Reminder Follow-Up Order', 'Order Follow-Up Reminder')}</div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#d97706', marginTop: '4px' }}>
-                    {customers.filter((c) => (c.days_since_last_order ?? 999) >= 7).length} Dokter
+                    {customers.filter((c) => (c.days_since_last_order ?? 999) >= 7).length} {tr('Dokter', 'Dentists')}
                   </div>
-                  <div style={{ fontSize: '11px', color: '#b45309', fontWeight: 600, marginTop: '4px' }}>Perlu follow-up order berkala</div>
+                  <div style={{ fontSize: '11px', color: '#b45309', fontWeight: 600, marginTop: '4px' }}>{tr('Perlu follow-up order berkala', 'Requires periodic order follow-up')}</div>
                 </div>
 
                 <div
                   onClick={() => setCrmSubTab('doctors')}
                   style={{ background: 'var(--bg-card)', borderRadius: '14px', padding: '16px 18px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)', cursor: 'pointer' }}
                 >
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Loyalty System & Diskon</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{tr('Loyalty System & Diskon', 'Loyalty System & Discount')}</div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#059669', marginTop: '4px' }}>
-                    {customers.filter((c) => (c.discount_percent || 0) > 0).length} Member
+                    {customers.filter((c) => (c.discount_percent || 0) > 0).length} {tr('Member', 'Members')}
                   </div>
-                  <div style={{ fontSize: '11px', color: '#059669', fontWeight: 600, marginTop: '4px' }}>Otomatis potong harga SPK tetap</div>
+                  <div style={{ fontSize: '11px', color: '#059669', fontWeight: 600, marginTop: '4px' }}>{tr('Otomatis potong harga SPK tetap', 'Automated SPK flat discount')}</div>
                 </div>
               </div>
 
               {/* Sub-Navigation Tabs for CRM */}
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '18px', borderBottom: '1.5px solid var(--border-light)', paddingBottom: '10px' }}>
                 {[
-                  { key: 'doctors', label: `🏥 Master Dokter & Klinik (${customers.length})` },
-                  { key: 'patients', label: `🧑 Master Data Pasien (${patients.length})` },
-                  { key: 'history', label: `📋 History Order & Feedback (${orders.length})` },
-                  { key: 'reminders', label: `⏰ Reminder Order & Follow-Up` },
+                  { key: 'doctors', label: tr(`🏥 Master Dokter & Klinik (${customers.length})`, `🏥 Dentist & Clinic Master (${customers.length})`) },
+                  { key: 'patients', label: tr(`🧑 Master Data Pasien (${patients.length})`, `🧑 Patient Master Data (${patients.length})`) },
+                  { key: 'history', label: tr(`📋 History Order & Feedback (${orders.length})`, `📋 Order History & Feedback (${orders.length})`) },
+                  { key: 'reminders', label: tr(`⏰ Reminder Order & Follow-Up`, `⏰ Order Reminder & Follow-Up`) },
                 ].map((tb) => (
                   <button
                     key={tb.key}
@@ -3899,7 +6706,7 @@ export function App() {
                       <Search size={16} color="var(--text-subtle)" style={{ position: 'absolute', left: '12px', top: '11px' }} />
                       <input
                         type="text"
-                        placeholder="Cari nama dokter, klinik, kode, atau nomor WA..."
+                        placeholder={tr("Cari nama dokter, klinik, kode, atau nomor WA...", "Search dentist name, clinic, code, or WhatsApp number...")}
                         value={crmDoctorSearch}
                         onChange={(e) => setCrmDoctorSearch(e.target.value)}
                         style={{ width: '100%', padding: '9px 14px 9px 36px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-surface)', color: 'var(--text-main)', fontSize: '13px' }}
@@ -3911,11 +6718,11 @@ export function App() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px 8px' }}>Kode & Dokter</th>
-                          <th style={{ padding: '12px 8px' }}>Klinik & Kontak</th>
-                          <th style={{ padding: '12px 8px' }}>Preferensi & Catatan Khusus</th>
-                          <th style={{ padding: '12px 8px' }}>Loyalty & Diskon</th>
-                          <th style={{ padding: '12px 8px' }}>Statistik Order</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Kode & Dokter', 'Code & Dentist')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Klinik & Kontak', 'Clinic & Contact')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Preferensi & Catatan Khusus', 'Preferences & Special Notes')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Loyalty & Diskon', 'Loyalty & Discount')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Statistik Order', 'Order Statistics')}</th>
                           <th style={{ padding: '12px 8px' }}>{t.colActions}</th>
                         </tr>
                       </thead>
@@ -3942,7 +6749,7 @@ export function App() {
                                 <td style={{ padding: '12px 8px' }}>
                                   <div style={{ fontWeight: 800, color: 'var(--primary)', fontSize: '12px' }}>{c.code}</div>
                                   <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{c.name}</div>
-                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>🧑 {c.patients_count || 0} Pasien Terdaftar</div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>🧑 {c.patients_count || 0} {tr('Pasien Terdaftar', 'Registered Patients')}</div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
                                   <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{c.clinic_name || '-'}</div>
@@ -3963,7 +6770,7 @@ export function App() {
                                     )}
                                   </div>
                                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                                    {c.notes ? `"${c.notes}"` : 'Belum ada catatan khusus'}
+                                    {c.notes ? `"${c.notes}"` : tr('Belum ada catatan khusus', 'No special notes')}
                                   </div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
@@ -3971,7 +6778,7 @@ export function App() {
                                     ★ {c.loyalty_tier || 'REGULAR'}
                                   </span>
                                   <div style={{ fontSize: '12px', fontWeight: 800, color: (c.discount_percent || 0) > 0 ? '#059669' : 'var(--text-subtle)', marginTop: '4px' }}>
-                                    Diskon Tetap: {c.discount_percent || 0}%
+                                    {tr('Diskon Tetap:', 'Flat Discount:')} {c.discount_percent || 0}%
                                   </div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
@@ -3979,8 +6786,8 @@ export function App() {
                                   <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 700 }}>{formatRupiah(c.total_spent || 0)}</div>
                                   <div style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>
                                     {c.last_order_date
-                                      ? `Terakhir: ${new Date(c.last_order_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}`
-                                      : 'Belum ada SPK'}
+                                      ? `${tr('Terakhir:', 'Last:')} ${new Date(c.last_order_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}`
+                                      : tr('Belum ada SPK', 'No SPK yet')}
                                   </div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
@@ -4004,7 +6811,7 @@ export function App() {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => openWhatsApp(c.phone, `Halo Dokter ${c.name}, salam hangat dari Dental Lab. Semoga praktik klinik hari ini lancar!`)}
+                                      onClick={() => openWhatsApp(c.phone, tr(`Halo Dokter ${c.name}, salam hangat dari Dental Lab. Semoga praktik klinik hari ini lancar!`, `Hello Dr. ${c.name}, warm greetings from Dental Lab!`))}
                                       style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#ecfdf5', color: '#059669', padding: '6px 10px', borderRadius: '6px', fontWeight: 700, fontSize: '11px' }}
                                     >
                                       <MessageCircle size={13} /> WA
@@ -4028,7 +6835,7 @@ export function App() {
                       <Search size={16} color="var(--text-subtle)" style={{ position: 'absolute', left: '12px', top: '11px' }} />
                       <input
                         type="text"
-                        placeholder="Cari nama pasien, kode pasien, atau catatan alergi/medis..."
+                        placeholder={tr("Cari nama pasien, kode pasien, atau catatan alergi/medis...", "Search patient name, code, or allergy/clinical notes...")}
                         value={crmPatientSearch}
                         onChange={(e) => setCrmPatientSearch(e.target.value)}
                         style={{ width: '100%', padding: '9px 14px 9px 36px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-surface)', color: 'var(--text-main)', fontSize: '13px' }}
@@ -4039,7 +6846,7 @@ export function App() {
                       onChange={(e) => setCrmPatientDoctorFilter(e.target.value)}
                       style={{ padding: '9px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-surface)', color: 'var(--text-main)', fontSize: '13px', fontWeight: 600 }}
                     >
-                      <option value="">Semua Dokter / Klinik Pengirim</option>
+                      <option value="">{tr('Semua Dokter / Klinik Pengirim', 'All Referring Dentists / Clinics')}</option>
                       {customers.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.name} ({c.clinic_name})
@@ -4052,12 +6859,12 @@ export function App() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px 8px' }}>Kode & Nama Pasien</th>
-                          <th style={{ padding: '12px 8px' }}>Gender & Usia</th>
-                          <th style={{ padding: '12px 8px' }}>Dokter / Klinik Pengirim</th>
-                          <th style={{ padding: '12px 8px' }}>Acuan Warna & Gigi</th>
-                          <th style={{ padding: '12px 8px' }}>Catatan Klinis / Alergi Bahan</th>
-                          <th style={{ padding: '12px 8px' }}>Riwayat SPK</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Kode & Nama Pasien', 'Patient Code & Name')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Gender & Usia', 'Gender & Age')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Dokter / Klinik Pengirim', 'Referring Dentist / Clinic')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Acuan Warna & Gigi', 'Shade & Tooth Reference')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Catatan Klinis / Alergi Bahan', 'Clinical Notes / Material Allergies')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Riwayat SPK', 'SPK History')}</th>
                           <th style={{ padding: '12px 8px' }}>{t.colActions}</th>
                         </tr>
                       </thead>
@@ -4080,9 +6887,9 @@ export function App() {
                               </td>
                               <td style={{ padding: '12px 8px' }}>
                                 <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
-                                  {p.gender === 'P' ? '👩 Perempuan' : '👨 Laki-laki'}
+                                  {p.gender === 'P' ? tr('👩 Perempuan', '👩 Female') : tr('👨 Laki-laki', '👨 Male')}
                                 </div>
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.age ? `${p.age} Tahun` : '-'}</div>
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.age ? `${p.age} ${tr('Tahun', 'Years')}` : '-'}</div>
                               </td>
                               <td style={{ padding: '12px 8px' }}>
                                 <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{p.customer?.name || '-'}</div>
@@ -4094,7 +6901,7 @@ export function App() {
                                 </span>
                                 {p.last_teeth_numbers && (
                                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                                    Gigi: {p.last_teeth_numbers}
+                                    {tr('Gigi:', 'Teeth:')} {p.last_teeth_numbers}
                                   </div>
                                 )}
                               </td>
@@ -4107,7 +6914,7 @@ export function App() {
                                 <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{p.total_orders || 0} SPK</div>
                                 {p.last_order_date && (
                                   <div style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>
-                                    {new Date(p.last_order_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                    {new Date(p.last_order_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
                                   </div>
                                 )}
                               </td>
@@ -4122,7 +6929,7 @@ export function App() {
                                     }}
                                     style={{ background: 'var(--primary)', color: '#ffffff', padding: '6px 10px', borderRadius: '6px', fontWeight: 700, fontSize: '11px' }}
                                   >
-                                    + Buat SPK
+                                    {tr('+ Buat SPK', '+ Create SPK')}
                                   </button>
                                   <button
                                     type="button"
@@ -4136,7 +6943,7 @@ export function App() {
                                     onClick={() => handleDeletePatient(p.id, p.name)}
                                     style={{ background: '#fef2f2', color: '#dc2626', padding: '6px 10px', borderRadius: '6px', fontWeight: 600, fontSize: '11px' }}
                                   >
-                                    Hapus
+                                    {tr('Hapus', 'Delete')}
                                   </button>
                                 </div>
                               </td>
@@ -4153,15 +6960,22 @@ export function App() {
                 <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
                     <div>
-                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>Riwayat Order & Feedback Kepuasan Dokter</h3>
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Mempermudah melihat seluruh SPK sebelumnya per dokter serta mencatat testimoni/evaluasi hasil kerja lab.</p>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        {tr('Riwayat Order & Feedback Kepuasan Dokter', 'Order History & Dentist Feedback')}
+                      </h3>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr(
+                          'Mempermudah melihat seluruh SPK sebelumnya per dokter serta mencatat testimoni/evaluasi hasil kerja lab.',
+                          'Easily inspect prior SPKs per doctor and record evaluations or testimonials on dental lab workmanship.'
+                        )}
+                      </p>
                     </div>
                     <select
                       value={crmHistoryDoctorFilter}
                       onChange={(e) => setCrmHistoryDoctorFilter(e.target.value)}
                       style={{ padding: '9px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-surface)', color: 'var(--text-main)', fontSize: '13px', fontWeight: 600 }}
                     >
-                      <option value="">Semua Dokter / Klinik ({orders.length} SPK)</option>
+                      <option value="">{tr(`Semua Dokter / Klinik (${orders.length} SPK)`, `All Dentists / Clinics (${orders.length} SPKs)`)}</option>
                       {customers.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.name} — {c.clinic_name} ({c.total_orders || 0} SPK)
@@ -4174,11 +6988,11 @@ export function App() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px 8px' }}>No. SPK & Tgl</th>
-                          <th style={{ padding: '12px 8px' }}>Dokter & Klinik</th>
-                          <th style={{ padding: '12px 8px' }}>Pasien & Jenis Gigi Tiruan</th>
-                          <th style={{ padding: '12px 8px' }}>Status & Nilai Order</th>
-                          <th style={{ padding: '12px 8px' }}>Feedback / Evaluasi Dokter</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('No. SPK & Tgl', 'SPK No. & Date')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Dokter & Klinik', 'Dentist & Clinic')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Pasien & Jenis Gigi Tiruan', 'Patient & Restoration')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Status & Nilai Order', 'Status & Order Amount')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Feedback / Evaluasi Dokter', 'Feedback & Evaluation')}</th>
                           <th style={{ padding: '12px 8px' }}>{t.colActions}</th>
                         </tr>
                       </thead>
@@ -4190,7 +7004,7 @@ export function App() {
                               <td style={{ padding: '12px 8px' }}>
                                 <div style={{ fontWeight: 800, color: 'var(--primary)' }}>{o.order_number}</div>
                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                                  {new Date(o.received_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                  {new Date(o.received_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
                                 </div>
                               </td>
                               <td style={{ padding: '12px 8px' }}>
@@ -4200,13 +7014,13 @@ export function App() {
                               <td style={{ padding: '12px 8px' }}>
                                 <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{o.patient_name}</div>
                                 <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600 }}>{o.denture_type?.name}</div>
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Gigi: {o.teeth_numbers} ({o.shade_guide})</div>
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{tr('Gigi:', 'Teeth:')} {o.teeth_numbers} ({o.shade_guide})</div>
                               </td>
                               <td style={{ padding: '12px 8px' }}>
                                 <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>{formatRupiah(o.total_price)}</div>
                                 {(o.discount_percent || 0) > 0 && (
                                   <div style={{ fontSize: '11px', color: '#059669', fontWeight: 700 }}>
-                                    Diskon Loyalty {o.discount_percent}%
+                                    {tr('Diskon Loyalty', 'Loyalty Discount')} {o.discount_percent}%
                                   </div>
                                 )}
                                 <span style={{ display: 'inline-block', marginTop: '3px', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 800, background: 'var(--bg-surface)', color: 'var(--text-main)' }}>
@@ -4220,11 +7034,11 @@ export function App() {
                                       {'★'.repeat(o.feedback_rating)}{'☆'.repeat(Math.max(0, 5 - o.feedback_rating))} ({o.feedback_rating}/5)
                                     </div>
                                     <div style={{ fontSize: '11px', color: 'var(--text-main)', fontStyle: 'italic', marginTop: '2px' }}>
-                                      "{o.feedback_notes || 'Puas dengan hasil kerja lab'}"
+                                      "{o.feedback_notes || tr('Puas dengan hasil kerja lab', 'Satisfied with lab craftsmanship')}"
                                     </div>
                                   </div>
                                 ) : (
-                                  <span style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>Belum ada feedback dicatat</span>
+                                  <span style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>{tr('Belum ada feedback dicatat', 'No feedback recorded yet')}</span>
                                 )}
                               </td>
                               <td style={{ padding: '12px 8px' }}>
@@ -4238,7 +7052,7 @@ export function App() {
                                     }}
                                     style={{ background: '#fef3c7', color: '#b45309', padding: '6px 10px', borderRadius: '6px', fontWeight: 700, fontSize: '11px' }}
                                   >
-                                    ★ Input Feedback
+                                    ★ {tr('Input Feedback', 'Record Feedback')}
                                   </button>
                                   <button
                                     type="button"
@@ -4248,7 +7062,7 @@ export function App() {
                                     }}
                                     style={{ background: 'var(--bg-surface)', color: 'var(--primary)', border: '1px solid var(--border-light)', padding: '6px 10px', borderRadius: '6px', fontWeight: 700, fontSize: '11px' }}
                                   >
-                                    Detail SPK
+                                    {tr('Detail SPK', 'SPK Detail')}
                                   </button>
                                 </div>
                               </td>
@@ -4264,9 +7078,14 @@ export function App() {
               {crmSubTab === 'reminders' && (
                 <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                   <div style={{ marginBottom: '16px' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>Reminder Follow-Up Dokter & Klinik</h3>
+                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                      {tr('Reminder Follow-Up Dokter & Klinik', 'Dentist & Clinic Follow-Up Reminders')}
+                    </h3>
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      Daftar pemantauan otomatis untuk melakukan follow-up kepada dokter yang belum mengirim order SPK baru atau mengingatkan program diskon pelanggan tetap.
+                      {tr(
+                        'Daftar pemantauan otomatis untuk melakukan follow-up kepada dokter yang belum mengirim order SPK baru atau mengingatkan program diskon pelanggan tetap.',
+                        'Automated tracking to follow up with dentists who have not placed recent orders or remind them of loyalty discounts.'
+                      )}
                     </p>
                   </div>
 
@@ -4274,11 +7093,11 @@ export function App() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px 8px' }}>Status Reminder</th>
-                          <th style={{ padding: '12px 8px' }}>Dokter & Klinik</th>
-                          <th style={{ padding: '12px 8px' }}>Order Terakhir</th>
-                          <th style={{ padding: '12px 8px' }}>Preferensi Favorit & Loyalty</th>
-                          <th style={{ padding: '12px 8px' }}>Aksi Follow-Up Cepat</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Status Reminder', 'Reminder Status')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Dokter & Klinik', 'Dentist & Clinic')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Order Terakhir', 'Last Order')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Preferensi Favorit & Loyalty', 'Favorite Preference & Loyalty')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Aksi Follow-Up Cepat', 'Quick Follow-Up Action')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4292,15 +7111,15 @@ export function App() {
                                 <td style={{ padding: '12px 8px' }}>
                                   {days >= 30 ? (
                                     <span style={{ background: '#fee2e2', color: '#dc2626', padding: '4px 10px', borderRadius: '99px', fontSize: '11px', fontWeight: 800 }}>
-                                      🔔 Perlu Follow-Up Segera ({days === 999 ? 'Belum Order' : `${days} hari lalu`})
+                                      🔔 {tr(`Perlu Follow-Up Segera (${days === 999 ? 'Belum Order' : `${days} hari lalu`})`, `Follow-Up Needed (${days === 999 ? 'No orders' : `${days} days ago`})`)}
                                     </span>
                                   ) : needsFollowUp ? (
                                     <span style={{ background: '#fef3c7', color: '#b45309', padding: '4px 10px', borderRadius: '99px', fontSize: '11px', fontWeight: 800 }}>
-                                      ⏰ Jadwal Follow-Up ({days} hari lalu)
+                                      ⏰ {tr(`Jadwal Follow-Up (${days} hari lalu)`, `Follow-Up Scheduled (${days} days ago)`)}
                                     </span>
                                   ) : (
                                     <span style={{ background: '#ecfdf5', color: '#059669', padding: '4px 10px', borderRadius: '99px', fontSize: '11px', fontWeight: 800 }}>
-                                      ✅ Aktif Order ({days === 0 ? 'Hari ini' : `${days} hari lalu`})
+                                      ✅ {tr(`Aktif Order (${days === 0 ? 'Hari ini' : `${days} hari lalu`})`, `Active Orders (${days === 0 ? 'Today' : `${days} days ago`})`)}
                                     </span>
                                   )}
                                 </td>
@@ -4311,8 +7130,8 @@ export function App() {
                                 <td style={{ padding: '12px 8px' }}>
                                   <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>
                                     {c.last_order_date
-                                      ? new Date(c.last_order_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
-                                      : 'Belum Pernah Order'}
+                                      ? new Date(c.last_order_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })
+                                      : tr('Belum Pernah Order', 'No Prior Order')}
                                   </div>
                                   <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Total: {c.total_orders || 0} SPK</div>
                                 </td>
@@ -4321,7 +7140,7 @@ export function App() {
                                     {c.favorite_denture_type || 'Zirconia / PFM'} ({c.favorite_shade || 'VITA A2'})
                                   </div>
                                   <div style={{ fontSize: '11px', color: '#059669', fontWeight: 700 }}>
-                                    Member {c.loyalty_tier || 'REGULAR'} (Diskon {c.discount_percent || 0}%)
+                                    Member {c.loyalty_tier || 'REGULAR'} ({tr('Diskon', 'Discount')} {c.discount_percent || 0}%)
                                   </div>
                                 </td>
                                 <td style={{ padding: '12px 8px' }}>
@@ -4331,11 +7150,20 @@ export function App() {
                                       onClick={() => {
                                         const promoText =
                                           (c.discount_percent || 0) > 0
-                                            ? `Sebagai mitra ${c.loyalty_tier}, Dokter berhak menikmati diskon otomatis ${c.discount_percent}% untuk setiap pembuatan gigi tiruan (${c.favorite_denture_type || 'Zirconia/PFM/Valplast'}).`
-                                            : `Kami siap membantu penjemputan cetakan gigi pasien untuk pembuatan ${c.favorite_denture_type || 'gigi tiruan'} di klinik Dokter.`
+                                            ? tr(
+                                                `Sebagai mitra ${c.loyalty_tier}, Dokter berhak menikmati diskon otomatis ${c.discount_percent}% untuk setiap pembuatan gigi tiruan (${c.favorite_denture_type || 'Zirconia/PFM/Valplast'}).`,
+                                                `As a ${c.loyalty_tier} partner, you receive an automatic ${c.discount_percent}% discount on all dental prosthesis cases.`
+                                              )
+                                            : tr(
+                                                `Kami siap membantu penjemputan cetakan gigi pasien untuk pembuatan ${c.favorite_denture_type || 'gigi tiruan'} di klinik Dokter.`,
+                                                `We are ready to arrange pickup of impressions for ${c.favorite_denture_type || 'denture'} cases.`
+                                              )
                                         openWhatsApp(
                                           c.phone,
-                                          `Halo ${c.name} (${c.clinic_name}), salam sehat dari Dental Lab! 🙏\n\nKami ingin melakukan follow-up apakah ada cetakan/kasus gigi tiruan pasien yang perlu kami jemput minggu ini? ${promoText}\n\nTerima kasih Dok!`
+                                          tr(
+                                            `Halo ${c.name} (${c.clinic_name}), salam sehat dari Dental Lab! 🙏\n\nKami ingin melakukan follow-up apakah ada cetakan/kasus gigi tiruan pasien yang perlu kami jemput minggu ini? ${promoText}\n\nTerima kasih Dok!`,
+                                            `Hello ${c.name} (${c.clinic_name}), greetings from Dental Lab! 🙏\n\nFollowing up to check if you have any dental impression cases ready for pickup this week? ${promoText}\n\nThank you Doctor!`
+                                          )
                                         )
                                       }}
                                       style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#22c55e', color: '#ffffff', padding: '7px 12px', borderRadius: '8px', fontWeight: 700, fontSize: '12px' }}
@@ -4350,7 +7178,7 @@ export function App() {
                                       }}
                                       style={{ background: 'var(--primary-subtle)', color: 'var(--primary)', padding: '7px 12px', borderRadius: '8px', fontWeight: 700, fontSize: '12px' }}
                                     >
-                                      + Input SPK Dokter Ini
+                                      {tr('+ Input SPK Dokter Ini', '+ New SPK for Doctor')}
                                     </button>
                                   </div>
                                 </td>
@@ -4370,9 +7198,14 @@ export function App() {
             <div>
               <div className="page-header-row" style={{ marginBottom: '20px' }}>
                 <div>
-                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>Manajemen SDM & Tugas Tekniker</h2>
+                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    {tr('Manajemen SDM & Tugas Tekniker', 'HR & Technician Task Management')}
+                  </h2>
                   <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    Profile tekniker & staf (keahlian, jadwal kerja, performa, role), penugasan tekniker, KPI produksi, serta pencatatan absensi & lembur.
+                    {tr(
+                      'Profile tekniker & staf (keahlian, jadwal kerja, performa, role), penugasan tekniker, KPI produksi, serta pencatatan absensi & lembur.',
+                      'Technician & staff profiles (skills, work schedule, performance, role), assignments, production KPIs, and attendance & overtime logs.'
+                    )}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
@@ -4381,14 +7214,14 @@ export function App() {
                     onClick={() => handleQuickCheckInToday(currentUser.id)}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#ecfdf5', color: '#059669', border: '1.5px solid #6ee7b7', padding: '10px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '13px' }}
                   >
-                    ✅ Check-In Hadir Hari Ini
+                    ✅ {tr('Check-In Hadir Hari Ini', 'Check-In Today')}
                   </button>
                   <button
                     type="button"
                     onClick={() => openCreateAttendanceModal(currentUser.id)}
                     style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-card)', color: 'var(--primary)', border: '1.5px solid var(--primary)', padding: '10px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '13px' }}
                   >
-                    ⏰ + Catat Absensi / Lembur
+                    ⏰ {tr('+ Catat Absensi / Lembur', '+ Log Attendance / Overtime')}
                   </button>
                   {(isSuperAdmin || currentUser.role?.name === 'OWNER' || currentUser.role?.name === 'ADMIN') && (
                     <button
@@ -4396,7 +7229,7 @@ export function App() {
                       onClick={() => setShowAddUserModal(true)}
                       style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--primary)', color: '#ffffff', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '13px', boxShadow: '0 4px 10px rgba(2, 132, 199, 0.25)' }}
                     >
-                      <UserPlus size={16} /> + Tambah Staf / Tekniker
+                      <UserPlus size={16} /> {tr('+ Tambah Staf / Tekniker', '+ Add Staff / Technician')}
                     </button>
                   )}
                 </div>
@@ -4405,34 +7238,40 @@ export function App() {
               {/* 4 KPI Summary Cards */}
               <div className="stats-grid" style={{ marginBottom: '20px' }}>
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>Total Tekniker & Staf Aktif</div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    {tr('Total Tekniker & Staf Aktif', 'Active Technicians & Staff')}
+                  </div>
                   <div style={{ fontSize: '26px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>
-                    {usersList.filter((u) => u.is_active).length} Orang
+                    {usersList.filter((u) => u.is_active).length} {tr('Orang', 'Staff')}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--primary)', marginTop: '4px', fontWeight: 600 }}>
-                    {usersList.filter((u) => u.role?.name === 'TECHNICIAN').length} Tekniker Gigi • {usersList.filter((u) => u.role?.name !== 'TECHNICIAN').length} Manajemen/Staf
+                    {usersList.filter((u) => u.role?.name === 'TECHNICIAN').length} {tr('Tekniker Gigi', 'Technicians')} • {usersList.filter((u) => u.role?.name !== 'TECHNICIAN').length} {tr('Manajemen/Staf', 'Management/Staff')}
                   </div>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>Penugasan SPK Sedang Dikerjakan</div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    {tr('Penugasan SPK Sedang Dikerjakan', 'Active Assigned SPKs')}
+                  </div>
                   <div style={{ fontSize: '26px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>
                     {orders.filter((o) => o.status !== 'COMPLETED' && o.status !== 'DELIVERED' && o.status !== 'CANCELLED').length} SPK
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-subtle)', marginTop: '4px', fontWeight: 600 }}>
-                    Terdistribusi ke PIC tekniker tiap tahapan
+                    {tr('Terdistribusi ke PIC tekniker tiap tahapan', 'Distributed to stage technicians')}
                   </div>
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>Rata-Rata KPI Mutu & Ketepatan</div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    {tr('Rata-Rata KPI Mutu & Ketepatan', 'Avg Quality & On-Time KPI')}
+                  </div>
                   <div style={{ fontSize: '26px', fontWeight: 800, color: '#10b981', marginTop: '4px' }}>
                     {usersList.length > 0
                       ? `${Math.round(usersList.reduce((acc, u) => acc + (u.qc_pass_rate || 95), 0) / usersList.length)}% QC`
                       : '98% QC'}
                   </div>
                   <div style={{ fontSize: '11px', color: '#059669', marginTop: '4px', fontWeight: 600 }}>
-                    Ketepatan Waktu (On-Time):{' '}
+                    {tr('Ketepatan Waktu (On-Time):', 'On-Time Delivery:')}{' '}
                     {usersList.length > 0
                       ? `${Math.round(usersList.reduce((acc, u) => acc + (u.on_time_rate || 95), 0) / usersList.length)}%`
                       : '96%'}
@@ -4440,12 +7279,14 @@ export function App() {
                 </div>
 
                 <div style={{ background: 'var(--bg-card)', padding: '18px', borderRadius: '14px', border: '1px solid var(--border-light)', boxShadow: 'var(--shadow-sm)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>Total Jam Lembur & Presensi</div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    {tr('Total Jam Lembur & Presensi', 'Total Overtime & Attendance')}
+                  </div>
                   <div style={{ fontSize: '26px', fontWeight: 800, color: '#d97706', marginTop: '4px' }}>
-                    {attendances.reduce((acc, a) => acc + (a.overtime_hours || 0), 0).toFixed(1)} Jam
+                    {attendances.reduce((acc, a) => acc + (a.overtime_hours || 0), 0).toFixed(1)} {tr('Jam', 'Hours')}
                   </div>
                   <div style={{ fontSize: '11px', color: '#d97706', marginTop: '4px', fontWeight: 600 }}>
-                    {attendances.length} Rekap Kehadiran Tercatat
+                    {attendances.length} {tr('Rekap Kehadiran Tercatat', 'Logged Presences')}
                   </div>
                 </div>
               </div>
@@ -4453,10 +7294,10 @@ export function App() {
               {/* Sub-Navigation Tabs for HR Module */}
               <div className="sub-tabs-scroll" style={{ marginBottom: '18px' }}>
                 {[
-                  { id: 'profiles', label: `👨‍🔬 Profile Tekniker & Staf (${usersList.length})` },
-                  { id: 'assignments', label: `📋 Penugasan Tekniker (${orders.filter((o) => o.status !== 'DELIVERED' && o.status !== 'CANCELLED').length} SPK)` },
-                  { id: 'kpi', label: `📊 KPI Produksi & Performa` },
-                  { id: 'attendance', label: `⏰ Absensi & Lembur (${attendances.length})` },
+                  { id: 'profiles', label: tr(`👨‍🔬 Profile Tekniker & Staf (${usersList.length})`, `👨‍🔬 Technician & Staff Profiles (${usersList.length})`) },
+                  { id: 'assignments', label: tr(`📋 Penugasan Tekniker (${orders.filter((o) => o.status !== 'DELIVERED' && o.status !== 'CANCELLED').length} SPK)`, `📋 Technician Assignments (${orders.filter((o) => o.status !== 'DELIVERED' && o.status !== 'CANCELLED').length} SPKs)`) },
+                  { id: 'kpi', label: tr(`📊 KPI Produksi & Performa`, `📊 Production KPI & Performance`) },
+                  { id: 'attendance', label: tr(`⏰ Absensi & Lembur (${attendances.length})`, `⏰ Attendance & Overtime (${attendances.length})`) },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -4486,7 +7327,7 @@ export function App() {
                       <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-subtle)' }} />
                       <input
                         type="text"
-                        placeholder="Cari nama staf/tekniker, NIK, spesialisasi, atau keahlian..."
+                        placeholder={tr("Cari nama staf/tekniker, NIK, spesialisasi, atau keahlian...", "Search staff name, code, specialization, or skills...")}
                         value={hrSearch}
                         onChange={(e) => setHrSearch(e.target.value)}
                         style={{ width: '100%', padding: '10px 14px 10px 42px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', outline: 'none', background: 'var(--bg-surface)', color: 'var(--text-main)' }}
@@ -4497,7 +7338,7 @@ export function App() {
                       onChange={(e) => setHrRoleFilter(e.target.value)}
                       style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-surface)', color: 'var(--text-main)', fontSize: '13px', fontWeight: 600 }}
                     >
-                      <option value="">Semua Role ({usersList.length})</option>
+                      <option value="">{tr(`Semua Role (${usersList.length})`, `All Roles (${usersList.length})`)}</option>
                       {rolesList.map((r) => (
                         <option key={r.id} value={r.name}>
                           Role: {r.name}
@@ -4574,7 +7415,7 @@ export function App() {
                                     <span style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)' }}>{u.full_name}</span>
                                     {isMe && (
                                       <span style={{ background: '#dbeafe', color: '#1d4ed8', fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '6px' }}>
-                                        Akun Saya
+                                        {tr('Akun Saya', 'My Account')}
                                       </span>
                                     )}
                                   </div>
@@ -4595,7 +7436,7 @@ export function App() {
                                       ROLE: {u.role?.name}
                                     </span>
                                     <span style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 700 }}>
-                                      {u.specialization || 'Staf Operasional Lab'}
+                                      {u.specialization || tr('Staf Operasional Lab', 'Lab Operations Staff')}
                                     </span>
                                   </div>
                                 </div>
@@ -4604,18 +7445,20 @@ export function App() {
                               {/* Work Schedule & Contact */}
                               <div style={{ background: 'var(--bg-card)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '12px', marginBottom: '10px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                  <span style={{ color: 'var(--text-muted)' }}>🕒 Jadwal Kerja:</span>
-                                  <strong style={{ color: 'var(--text-main)' }}>{u.work_schedule || 'Senin - Sabtu (08:00 - 17:00)'}</strong>
+                                  <span style={{ color: 'var(--text-muted)' }}>🕒 {tr('Jadwal Kerja:', 'Schedule:')}</span>
+                                  <strong style={{ color: 'var(--text-main)' }}>{u.work_schedule || tr('Senin - Sabtu (08:00 - 17:00)', 'Mon - Sat (08:00 - 17:00)')}</strong>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                  <span style={{ color: 'var(--text-muted)' }}>📱 Kontak WA:</span>
+                                  <span style={{ color: 'var(--text-muted)' }}>📱 {tr('Kontak WA:', 'WhatsApp:')}</span>
                                   <strong style={{ color: 'var(--text-main)' }}>{u.phone || '-'}</strong>
                                 </div>
                               </div>
 
                               {/* Keahlian / Skills Chips */}
                               <div style={{ marginBottom: '10px' }}>
-                                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '5px' }}>KEAHLIAN & KOMPETENSI:</div>
+                                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '5px' }}>
+                                  {tr('KEAHLIAN & KOMPETENSI:', 'SKILLS & COMPETENCY:')}
+                                </div>
                                 <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                                   {skillsArr.length > 0 ? (
                                     skillsArr.map((sk, idx) => (
@@ -4627,7 +7470,9 @@ export function App() {
                                       </span>
                                     ))
                                   ) : (
-                                    <span style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>Prostodonsia & Operasional Lab</span>
+                                    <span style={{ fontSize: '11px', color: 'var(--text-subtle)' }}>
+                                      {tr('Prostodonsia & Operasional Lab', 'Prosthodontics & Lab Operations')}
+                                    </span>
                                   )}
                                 </div>
                               </div>
@@ -4635,7 +7480,7 @@ export function App() {
                               {/* Performance Mini Summary */}
                               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', background: 'var(--bg-card)', padding: '8px', borderRadius: '10px', border: '1px solid var(--border-light)', textAlign: 'center' }}>
                                 <div>
-                                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Order Selesai</div>
+                                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{tr('Order Selesai', 'Completed')}</div>
                                   <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)' }}>
                                     {(u.completed_orders_count || 0) + (u.completed_stages_count || 0)}
                                   </div>
@@ -4645,7 +7490,7 @@ export function App() {
                                   <div style={{ fontSize: '14px', fontWeight: 800, color: '#059669' }}>{u.on_time_rate ?? 100}%</div>
                                 </div>
                                 <div>
-                                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Kualitas QC</div>
+                                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{tr('Kualitas QC', 'QC Quality')}</div>
                                   <div style={{ fontSize: '14px', fontWeight: 800, color: '#0284c7' }}>{u.qc_pass_rate ?? 100}%</div>
                                 </div>
                               </div>
@@ -4654,7 +7499,7 @@ export function App() {
                             {/* Action Buttons */}
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid var(--border-light)', gap: '6px' }}>
                               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                                Aktif: <strong>{u.active_orders_count || 0} SPK</strong> • Lembur: <strong>{u.total_overtime_hours || 0}j</strong>
+                                {tr('Aktif:', 'Active:')} <strong>{u.active_orders_count || 0} SPK</strong> • {tr('Lembur:', 'Overtime:')} <strong>{u.total_overtime_hours || 0}{tr('j', 'h')}</strong>
                               </span>
                               <div style={{ display: 'flex', gap: '6px' }}>
                                 {isMe && (
@@ -4663,7 +7508,7 @@ export function App() {
                                     onClick={() => setActiveTab('profile')}
                                     style={{ background: 'var(--primary)', color: '#ffffff', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700 }}
                                   >
-                                    Profil Saya
+                                    {tr('Profil Saya', 'My Profile')}
                                   </button>
                                 )}
                                 {(isSuperAdmin || currentUser.role?.name === 'OWNER' || currentUser.role?.name === 'ADMIN') && (
@@ -4672,7 +7517,7 @@ export function App() {
                                     onClick={() => openEditStaffModal(u)}
                                     style={{ background: 'var(--bg-card)', color: 'var(--primary)', border: '1px solid var(--primary)', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700 }}
                                   >
-                                    Edit Profil & Keahlian
+                                    {tr('Edit Profil & Keahlian', 'Edit Profile & Skills')}
                                   </button>
                                 )}
                               </div>
@@ -4717,7 +7562,7 @@ export function App() {
                               </div>
                               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{tech.specialization || tech.role?.name}</div>
                               <div style={{ fontSize: '11px', fontWeight: 800, color: assignedActive > 0 ? '#0284c7' : '#059669', marginTop: '2px' }}>
-                                Beban Kerja: {assignedActive} SPK Aktif
+                                {tr('Beban Kerja:', 'Workload:')} {assignedActive} {tr('SPK Aktif', 'Active SPKs')}
                               </div>
                             </div>
                           </div>
@@ -4728,9 +7573,14 @@ export function App() {
                   {/* Table to Assign / Reassign Technicians on Active SPKs & Stages */}
                   <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                     <div style={{ marginBottom: '14px' }}>
-                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>Papan Penugasan Tekniker (Assign Tugas SPK & Tahapan Produksi)</h3>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        {tr('Papan Penugasan Tekniker (Assign Tugas SPK & Tahapan Produksi)', 'Technician Assignment Board (SPK & Production Stage Assign)')}
+                      </h3>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        Pilih atau ubah PIC Tekniker untuk setiap tahap pengerjaan SPK (Model Gips → Design → Wax-up → Casting → Finishing → QC).
+                        {tr(
+                          'Pilih atau ubah PIC Tekniker untuk setiap tahap pengerjaan SPK (Model Gips → Design → Wax-up → Casting → Finishing → QC).',
+                          'Assign or change technician PIC for each SPK stage (Plaster Model → Design → Wax-up → Casting → Finishing → QC).'
+                        )}
                       </p>
                     </div>
 
@@ -4738,13 +7588,13 @@ export function App() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                         <thead>
                           <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                            <th style={{ padding: '12px 8px' }}>No. SPK & Prioritas</th>
-                            <th style={{ padding: '12px 8px' }}>Pasien & Dokter</th>
-                            <th style={{ padding: '12px 8px' }}>Jenis Gigi Tiruan</th>
-                            <th style={{ padding: '12px 8px' }}>Tahap Aktif Saat Ini</th>
-                            <th style={{ padding: '12px 8px' }}>Assign PIC Tekniker (Tahap Aktif)</th>
-                            <th style={{ padding: '12px 8px' }}>Target Selesai</th>
-                            <th style={{ padding: '12px 8px' }}>Aksi</th>
+                            <th style={{ padding: '12px 8px' }}>{tr('No. SPK & Prioritas', 'SPK No. & Priority')}</th>
+                            <th style={{ padding: '12px 8px' }}>{tr('Pasien & Dokter', 'Patient & Dentist')}</th>
+                            <th style={{ padding: '12px 8px' }}>{tr('Jenis Gigi Tiruan', 'Restoration Type')}</th>
+                            <th style={{ padding: '12px 8px' }}>{tr('Tahap Aktif Saat Ini', 'Active Stage')}</th>
+                            <th style={{ padding: '12px 8px' }}>{tr('Assign PIC Tekniker (Tahap Aktif)', 'Assign Stage Technician')}</th>
+                            <th style={{ padding: '12px 8px' }}>{tr('Target Selesai', 'Target Due Date')}</th>
+                            <th style={{ padding: '12px 8px' }}>{tr('Aksi', 'Action')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -4773,7 +7623,7 @@ export function App() {
                                   </td>
                                   <td style={{ padding: '12px 8px' }}>
                                     <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{o.denture_type?.name}</div>
-                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Gigi: {o.teeth_numbers} ({o.shade_guide})</div>
+                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{tr('Gigi:', 'Teeth:')} {o.teeth_numbers} ({o.shade_guide})</div>
                                   </td>
                                   <td style={{ padding: '12px 8px' }}>
                                     <span style={{ background: '#e0f2fe', color: '#0369a1', padding: '4px 10px', borderRadius: '99px', fontSize: '11px', fontWeight: 800 }}>
@@ -4791,14 +7641,14 @@ export function App() {
                                             await api.updateStageRun(o.id, activeRun.id, { technician_id: techId })
                                             await loadInitialData()
                                           } catch (err: any) {
-                                            alert(err.message || 'Gagal assign tekniker')
+                                            alert(err.message || tr('Gagal assign tekniker', 'Failed to assign technician'))
                                           } finally {
                                             setLoading(false)
                                           }
                                         }}
                                         style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1.5px solid var(--primary-light)', background: 'var(--bg-surface)', color: 'var(--text-main)', fontSize: '12px', fontWeight: 700 }}
                                       >
-                                        <option value="">-- Pilih PIC Tekniker --</option>
+                                        <option value="">-- {tr('Pilih PIC Tekniker', 'Select Technician PIC')} --</option>
                                         {usersList.map((u) => (
                                           <option key={u.id} value={u.id}>
                                             👨‍🔬 {u.full_name} ({u.role?.name})
@@ -4807,12 +7657,12 @@ export function App() {
                                       </select>
                                     ) : (
                                       <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                                        {o.current_technician?.full_name || 'Belum ditugaskan'}
+                                        {o.current_technician?.full_name || tr('Belum ditugaskan', 'Unassigned')}
                                       </span>
                                     )}
                                   </td>
                                   <td style={{ padding: '12px 8px', fontWeight: 700, color: 'var(--text-main)' }}>
-                                    {new Date(o.promised_due_date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                    {new Date(o.promised_due_date).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
                                   </td>
                                   <td style={{ padding: '12px 8px' }}>
                                     <button
@@ -4823,7 +7673,7 @@ export function App() {
                                       }}
                                       style={{ background: 'var(--primary-subtle)', color: 'var(--primary)', padding: '6px 12px', borderRadius: '8px', fontWeight: 700, fontSize: '12px' }}
                                     >
-                                      Detail & Tahapan →
+                                      {tr('Detail & Tahapan →', 'Details & Stages →')}
                                     </button>
                                   </td>
                                 </tr>
@@ -4840,9 +7690,14 @@ export function App() {
               {hrSubTab === 'kpi' && (
                 <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                   <div style={{ marginBottom: '16px' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>Laporan KPI Produksi & Evaluasi Kualitas Kerja Tekniker</h3>
+                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                      {tr('Laporan KPI Produksi & Evaluasi Kualitas Kerja Tekniker', 'Production KPI Report & Technician Quality Evaluation')}
+                    </h3>
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      Metrik terukur berdasarkan jumlah order selesai, tahapan produksi yang diselesaikan, persentase ketepatan waktu (On-Time Delivery), tingkat kelulusan QC (Quality Pass Rate), dan rating kepuasan dokter.
+                      {tr(
+                        'Metrik terukur berdasarkan jumlah order selesai, tahapan produksi yang diselesaikan, persentase ketepatan waktu (On-Time Delivery), tingkat kelulusan QC (Quality Pass Rate), dan rating kepuasan dokter.',
+                        'Measurable metrics based on completed orders, finished stages, on-time delivery rate, QC pass rate, and dentist satisfaction ratings.'
+                      )}
                     </p>
                   </div>
 
@@ -4850,13 +7705,13 @@ export function App() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px 8px' }}>Tekniker / Staf</th>
-                          <th style={{ padding: '12px 8px' }}>Role & Spesialisasi</th>
-                          <th style={{ padding: '12px 8px' }}>Order & Tahap Selesai</th>
-                          <th style={{ padding: '12px 8px' }}>Ketepatan Waktu (On-Time)</th>
-                          <th style={{ padding: '12px 8px' }}>Kualitas Hasil (Lolos QC)</th>
-                          <th style={{ padding: '12px 8px' }}>Rating Dokter</th>
-                          <th style={{ padding: '12px 8px' }}>Grade Performa</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Tekniker / Staf', 'Technician / Staff')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Role & Spesialisasi', 'Role & Specialization')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Order & Tahap Selesai', 'Orders & Stages Done')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Ketepatan Waktu (On-Time)', 'On-Time Rate')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Kualitas Hasil (Lolos QC)', 'QC Pass Rate')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Rating Dokter', 'Dentist Rating')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Grade Performa', 'Performance Grade')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4864,7 +7719,7 @@ export function App() {
                           const onTime = u.on_time_rate ?? 100
                           const qcRate = u.qc_pass_rate ?? 100
                           const avgScore = (onTime + qcRate) / 2
-                          const grade = avgScore >= 95 ? 'A+ (Sangat Baik)' : avgScore >= 85 ? 'A (Baik)' : 'B (Cukup)'
+                          const grade = avgScore >= 95 ? tr('A+ (Sangat Baik)', 'A+ (Excellent)') : avgScore >= 85 ? tr('A (Baik)', 'A (Good)') : tr('B (Cukup)', 'B (Satisfactory)')
                           return (
                             <tr key={u.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
                               <td style={{ padding: '12px 8px' }}>
@@ -4890,15 +7745,15 @@ export function App() {
                               </td>
                               <td style={{ padding: '12px 8px' }}>
                                 <div style={{ fontWeight: 800, color: 'var(--text-main)' }}>
-                                  {u.completed_orders_count || 0} SPK Selesai
+                                  {u.completed_orders_count || 0} {tr('SPK Selesai', 'SPKs Done')}
                                 </div>
                                 <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600 }}>
-                                  ✓ {u.completed_stages_count || 0} Tahap Kerja • {u.active_orders_count || 0} Aktif
+                                  ✓ {u.completed_stages_count || 0} {tr('Tahap Kerja', 'Stages')} • {u.active_orders_count || 0} {tr('Aktif', 'Active')}
                                 </div>
                               </td>
                               <td style={{ padding: '12px 8px', minWidth: '150px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 800, color: '#059669', marginBottom: '4px' }}>
-                                  <span>{onTime}% Tepat Waktu</span>
+                                  <span>{onTime}% {tr('Tepat Waktu', 'On-Time')}</span>
                                 </div>
                                 <div style={{ width: '100%', height: '7px', background: 'var(--bg-surface)', borderRadius: '99px', overflow: 'hidden' }}>
                                   <div style={{ width: `${Math.min(100, onTime)}%`, height: '100%', background: '#10b981', borderRadius: '99px' }} />
@@ -4906,7 +7761,7 @@ export function App() {
                               </td>
                               <td style={{ padding: '12px 8px', minWidth: '150px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 800, color: '#0284c7', marginBottom: '4px' }}>
-                                  <span>{qcRate}% Lolos QC</span>
+                                  <span>{qcRate}% {tr('Lolos QC', 'QC Pass')}</span>
                                 </div>
                                 <div style={{ width: '100%', height: '7px', background: 'var(--bg-surface)', borderRadius: '99px', overflow: 'hidden' }}>
                                   <div style={{ width: `${Math.min(100, qcRate)}%`, height: '100%', background: '#0284c7', borderRadius: '99px' }} />
@@ -4916,7 +7771,7 @@ export function App() {
                                 <div style={{ color: '#f59e0b', fontWeight: 800, fontSize: '13px' }}>
                                   ★ {(u.avg_feedback_rating || 5.0).toFixed(1)} / 5.0
                                 </div>
-                                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Kepuasan Dokter</div>
+                                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{tr('Kepuasan Dokter', 'Dentist Rating')}</div>
                               </td>
                               <td style={{ padding: '12px 8px' }}>
                                 <span
@@ -4946,9 +7801,14 @@ export function App() {
                 <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
                     <div>
-                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>Rekap Absensi Harian & Jam Lembur Tekniker/Staf</h3>
+                      <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        {tr('Rekap Absensi Harian & Jam Lembur Tekniker/Staf', 'Daily Attendance & Overtime Log')}
+                      </h3>
                       <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        Pencatatan kehadiran harian (Hadir, Terlambat, Izin, Sakit, Cuti), jam masuk/pulang, serta durasi & keterangan lembur pengerjaan SPK.
+                        {tr(
+                          'Pencatatan kehadiran harian (Hadir, Terlambat, Izin, Sakit, Cuti), jam masuk/pulang, serta durasi & keterangan lembur pengerjaan SPK.',
+                          'Daily presence records (Present, Late, Permission, Sick, Leave), check in/out time, and overtime hours for SPK cases.'
+                        )}
                       </p>
                     </div>
                     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
@@ -4957,7 +7817,7 @@ export function App() {
                         onChange={(e) => setHrAttUserFilter(e.target.value)}
                         style={{ padding: '9px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'var(--bg-surface)', color: 'var(--text-main)', fontSize: '13px', fontWeight: 600 }}
                       >
-                        <option value="">Semua Staf & Tekniker ({attendances.length})</option>
+                        <option value="">{tr(`Semua Staf & Tekniker (${attendances.length})`, `All Staff & Technicians (${attendances.length})`)}</option>
                         {usersList.map((u) => (
                           <option key={u.id} value={u.id}>
                             {u.full_name} ({u.role?.name})
@@ -4969,7 +7829,7 @@ export function App() {
                         onClick={() => openCreateAttendanceModal(hrAttUserFilter || currentUser.id)}
                         style={{ background: 'var(--primary)', color: '#ffffff', padding: '9px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: 700 }}
                       >
-                        + Input Absensi / Lembur
+                        {tr('+ Input Absensi / Lembur', '+ Log Attendance / Overtime')}
                       </button>
                     </div>
                   </div>
@@ -4978,14 +7838,14 @@ export function App() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
                       <thead>
                         <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
-                          <th style={{ padding: '12px 8px' }}>Tanggal</th>
-                          <th style={{ padding: '12px 8px' }}>Nama Staf / Tekniker</th>
-                          <th style={{ padding: '12px 8px' }}>Shift & Jadwal</th>
-                          <th style={{ padding: '12px 8px' }}>Jam Masuk - Pulang</th>
-                          <th style={{ padding: '12px 8px' }}>Status Kehadiran</th>
-                          <th style={{ padding: '12px 8px' }}>Jam Lembur</th>
-                          <th style={{ padding: '12px 8px' }}>Catatan Lembur / Pekerjaan</th>
-                          <th style={{ padding: '12px 8px' }}>Aksi</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Tanggal', 'Date')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Nama Staf / Tekniker', 'Staff / Technician Name')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Shift & Jadwal', 'Shift & Schedule')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Jam Masuk - Pulang', 'Check-In - Out')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Status Kehadiran', 'Presence Status')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Jam Lembur', 'Overtime')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Catatan Lembur / Pekerjaan', 'Overtime Notes / Job')}</th>
+                          <th style={{ padding: '12px 8px' }}>{tr('Aksi', 'Action')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4994,10 +7854,10 @@ export function App() {
                           .map((a) => (
                             <tr key={a.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
                               <td style={{ padding: '12px 8px', fontWeight: 700, color: 'var(--text-main)' }}>
-                                {new Date(a.attendance_date).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}
+                                {new Date(a.attendance_date).toLocaleDateString(dateLocale, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}
                               </td>
                               <td style={{ padding: '12px 8px' }}>
-                                <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{a.user?.full_name || 'Staf Lab'}</div>
+                                <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{a.user?.full_name || tr('Staf Lab', 'Lab Staff')}</div>
                                 <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600 }}>{a.user?.role?.name || ''}</div>
                               </td>
                               <td style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--text-muted)' }}>{a.shift_schedule}</td>
@@ -5031,10 +7891,10 @@ export function App() {
                               <td style={{ padding: '12px 8px' }}>
                                 {a.overtime_hours > 0 ? (
                                   <span style={{ background: '#fffbeb', color: '#d97706', border: '1px solid #fde68a', padding: '3px 8px', borderRadius: '6px', fontWeight: 800, fontSize: '12px' }}>
-                                    +{a.overtime_hours} Jam Lembur
+                                    +{a.overtime_hours} {tr('Jam Lembur', 'Hours Overtime')}
                                   </span>
                                 ) : (
-                                  <span style={{ color: 'var(--text-subtle)', fontSize: '12px' }}>0 Jam</span>
+                                  <span style={{ color: 'var(--text-subtle)', fontSize: '12px' }}>0 {tr('Jam', 'Hours')}</span>
                                 )}
                               </td>
                               <td style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--text-main)', maxWidth: '260px' }}>
@@ -5047,7 +7907,7 @@ export function App() {
                                     onClick={() => handleDeleteAttendance(a.id)}
                                     style={{ background: '#fef2f2', color: '#dc2626', padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700 }}
                                   >
-                                    Hapus
+                                    {tr('Hapus', 'Delete')}
                                   </button>
                                 )}
                               </td>
@@ -5066,9 +7926,14 @@ export function App() {
             <div>
               <div className="page-header-row" style={{ marginBottom: '20px' }}>
                 <div>
-                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>Profil Saya & Identitas Akun Login</h2>
+                  <h2 style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    {tr('Profil Saya & Identitas Akun Login', 'My Profile & Login Account Details')}
+                  </h2>
                   <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    Detail data lengkap pengguna yang sedang login, foto profil (avatar), informasi keahlian & jadwal kerja, hak akses role, serta performa pribadi.
+                    {tr(
+                      'Detail data lengkap pengguna yang sedang login, foto profil (avatar), informasi keahlian & jadwal kerja, hak akses role, serta performa pribadi.',
+                      'Complete logged-in user profile, avatar photo, technical skills & work schedule, role permissions, and personal performance KPIs.'
+                    )}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
@@ -5077,14 +7942,14 @@ export function App() {
                     onClick={() => handleQuickCheckInToday(currentUser.id)}
                     style={{ background: '#ecfdf5', color: '#059669', border: '1.5px solid #6ee7b7', padding: '10px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '13px' }}
                   >
-                    ✅ Check-In Kehadiran Hari Ini
+                    ✅ {tr('Check-In Kehadiran Hari Ini', 'Check-In Today')}
                   </button>
                   <button
                     type="button"
                     onClick={() => openCreateAttendanceModal(currentUser.id)}
                     style={{ background: 'var(--primary-subtle)', color: 'var(--primary)', padding: '10px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '13px' }}
                   >
-                    ⏰ + Catat Lembur Saya
+                    ⏰ {tr('+ Catat Lembur Saya', '+ Log My Overtime')}
                   </button>
                 </div>
               </div>
@@ -5147,7 +8012,7 @@ export function App() {
                     }}
                   >
                     <Upload size={13} />
-                    <span>{uploadingAvatar ? 'Mengunggah...' : 'Ganti Foto Profil'}</span>
+                    <span>{uploadingAvatar ? tr('Mengunggah...', 'Uploading...') : tr('Ganti Foto Profil', 'Change Photo')}</span>
                     <input type="file" accept="image/*" onChange={handleMyAvatarChange} style={{ display: 'none' }} />
                   </label>
                 </div>
@@ -5165,11 +8030,11 @@ export function App() {
                   </div>
 
                   <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--primary)', marginBottom: '8px' }}>
-                    {currentUser.specialization || 'Staf Profesional DentalLab Pro'}
+                    {currentUser.specialization || tr('Staf Profesional DentalLab Pro', 'DentalLab Pro Specialist')}
                   </div>
 
                   <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.5 }}>
-                    {currentUser.bio || 'Anggota tim laboratorium gigi presisi DentalLab Pro.'}
+                    {currentUser.bio || tr('Anggota tim laboratorium gigi presisi DentalLab Pro.', 'DentalLab Pro Precision Dental Laboratory Specialist.')}
                   </p>
 
                   <div className="grid-3col" style={{ gap: '10px', background: 'var(--bg-surface)', padding: '12px', borderRadius: '12px', border: '1px solid var(--border-light)', fontSize: '12px' }}>
@@ -5178,18 +8043,20 @@ export function App() {
                       <strong style={{ color: 'var(--text-main)' }}>@{currentUser.username} • {currentUser.email || '-'}</strong>
                     </div>
                     <div>
-                      <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>🕒 Jadwal Kerja</span>
-                      <strong style={{ color: 'var(--text-main)' }}>{currentUser.work_schedule || 'Senin - Sabtu (08:00 - 17:00)'}</strong>
+                      <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>🕒 {tr('Jadwal Kerja', 'Work Schedule')}</span>
+                      <strong style={{ color: 'var(--text-main)' }}>{currentUser.work_schedule || tr('Senin - Sabtu (08:00 - 17:00)', 'Mon - Sat (08:00 - 17:00)')}</strong>
                     </div>
                     <div>
-                      <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>📱 No. WhatsApp & Tgl Gabung</span>
-                      <strong style={{ color: 'var(--text-main)' }}>{currentUser.phone || '-'} (Sejak {currentUser.join_date || '2023'})</strong>
+                      <span style={{ color: 'var(--text-muted)', display: 'block', fontSize: '11px' }}>📱 {tr('No. WhatsApp & Tgl Gabung', 'WhatsApp & Joined Date')}</span>
+                      <strong style={{ color: 'var(--text-main)' }}>{currentUser.phone || '-'} ({tr('Sejak', 'Since')} {currentUser.join_date || '2023'})</strong>
                     </div>
                   </div>
 
                   {/* Role Menu Permissions Badges */}
                   <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>Akses Menu Role ({currentUser.role?.name}):</span>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>
+                      {tr(`Akses Menu Role (${currentUser.role?.name}):`, `Menu Access for Role (${currentUser.role?.name}):`)}
+                    </span>
                     {allowedMenus.map((m) => (
                       <span key={m} style={{ background: '#ecfdf5', color: '#059669', border: '1px solid #a7f3d0', padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 800 }}>
                         ✓ {m.toUpperCase()}
@@ -5202,16 +8069,20 @@ export function App() {
               {/* 4 Personal KPI & Attendance Cards */}
               <div className="stats-grid" style={{ marginBottom: '20px' }}>
                 <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '14px', border: '1px solid var(--border-light)' }}>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Tugas SPK & Tahap Selesai</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    {tr('Tugas SPK & Tahap Selesai', 'Finished Orders & Stages')}
+                  </div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>
-                    {(currentUser.completed_orders_count || 0) + (currentUser.completed_stages_count || 0)} Selesai
+                    {(currentUser.completed_orders_count || 0) + (currentUser.completed_stages_count || 0)} {tr('Selesai', 'Done')}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 600, marginTop: '4px' }}>
-                    Sedang dikerjakan: {currentUser.active_orders_count || 0} SPK Aktif
+                    {tr('Sedang dikerjakan:', 'In Progress:')} {currentUser.active_orders_count || 0} {tr('SPK Aktif', 'Active SPKs')}
                   </div>
                 </div>
                 <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '14px', border: '1px solid var(--border-light)' }}>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Ketepatan Waktu Pribadi</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    {tr('Ketepatan Waktu Pribadi', 'Personal On-Time Rate')}
+                  </div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#10b981', marginTop: '4px' }}>
                     {currentUser.on_time_rate ?? 100}%
                   </div>
@@ -5220,21 +8091,25 @@ export function App() {
                   </div>
                 </div>
                 <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '14px', border: '1px solid var(--border-light)' }}>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Kualitas Hasil Kerja (QC)</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    {tr('Kualitas Hasil Kerja (QC)', 'Workmanship Quality (QC)')}
+                  </div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#0284c7', marginTop: '4px' }}>
                     {currentUser.qc_pass_rate ?? 100}%
                   </div>
                   <div style={{ fontSize: '11px', color: '#f59e0b', fontWeight: 700, marginTop: '4px' }}>
-                    ★ Rating Dokter: {(currentUser.avg_feedback_rating || 5.0).toFixed(1)} / 5.0
+                    ★ {tr('Rating Dokter:', 'Dentist Rating:')} {(currentUser.avg_feedback_rating || 5.0).toFixed(1)} / 5.0
                   </div>
                 </div>
                 <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '14px', border: '1px solid var(--border-light)' }}>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Presensi & Jam Lembur Saya</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    {tr('Presensi & Jam Lembur Saya', 'My Presence & Overtime')}
+                  </div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#d97706', marginTop: '4px' }}>
-                    {currentUser.attendance_present_days || 0} Hari Hadir
+                    {currentUser.attendance_present_days || 0} {tr('Hari Hadir', 'Days Present')}
                   </div>
                   <div style={{ fontSize: '11px', color: '#d97706', fontWeight: 700, marginTop: '4px' }}>
-                    Total Lembur: {currentUser.total_overtime_hours || 0} Jam
+                    {tr('Total Lembur:', 'Total Overtime:')} {currentUser.total_overtime_hours || 0} {tr('Jam', 'Hours')}
                   </div>
                 </div>
               </div>
@@ -5243,14 +8118,21 @@ export function App() {
               <div className="grid-2col" style={{ gap: '20px', alignItems: 'start' }}>
                 {/* Left Column: Edit My Profile Form */}
                 <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '22px', boxShadow: 'var(--shadow-sm)' }}>
-                  <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>✏️ Edit Data Lengkap Profil Saya</h3>
+                  <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
+                    ✏️ {tr('Edit Data Lengkap Profil Saya', 'Edit My Full Profile')}
+                  </h3>
                   <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                    Perbarui informasi pribadi, keahlian teknis, jadwal kerja, alamat, dan kata sandi akun Anda.
+                    {tr(
+                      'Perbarui informasi pribadi, keahlian teknis, jadwal kerja, alamat, dan kata sandi akun Anda.',
+                      'Update personal details, technical competency, work schedule, address, and password.'
+                    )}
                   </p>
                   <form onSubmit={handleSaveMyProfile}>
                     <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                       <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Nama Lengkap *</label>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                          {tr('Nama Lengkap *', 'Full Name *')}
+                        </label>
                         <input
                           type="text"
                           value={myFullName}
@@ -5260,7 +8142,9 @@ export function App() {
                         />
                       </div>
                       <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Jabatan / Spesialisasi</label>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                          {tr('Jabatan / Spesialisasi', 'Job Title / Specialization')}
+                        </label>
                         <input
                           type="text"
                           value={mySpecialization}
@@ -5282,7 +8166,9 @@ export function App() {
                         />
                       </div>
                       <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>No. WhatsApp / Telepon</label>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                          {tr('No. WhatsApp / Telepon', 'WhatsApp / Phone No.')}
+                        </label>
                         <input
                           type="text"
                           value={myPhone}
@@ -5294,7 +8180,9 @@ export function App() {
 
                     <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                       <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Jadwal Kerja / Shift</label>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                          {tr('Jadwal Kerja / Shift', 'Work Schedule / Shift')}
+                        </label>
                         <input
                           type="text"
                           value={mySchedule}
@@ -5304,7 +8192,9 @@ export function App() {
                         />
                       </div>
                       <div>
-                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Tanggal Bergabung</label>
+                        <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                          {tr('Tanggal Bergabung', 'Joined Date')}
+                        </label>
                         <input
                           type="date"
                           value={myJoinDate}
@@ -5316,7 +8206,7 @@ export function App() {
 
                     <div style={{ marginBottom: '12px' }}>
                       <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                        Keahlian Teknis / Kompetensi (Pisahkan dengan koma)
+                        {tr('Keahlian Teknis / Kompetensi (Pisahkan dengan koma)', 'Technical Competencies (Comma-separated)')}
                       </label>
                       <input
                         type="text"
@@ -5328,7 +8218,9 @@ export function App() {
                     </div>
 
                     <div style={{ marginBottom: '12px' }}>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Alamat Domisili</label>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                        {tr('Alamat Domisili', 'Home Address')}
+                      </label>
                       <input
                         type="text"
                         value={myAddress}
@@ -5338,7 +8230,9 @@ export function App() {
                     </div>
 
                     <div style={{ marginBottom: '12px' }}>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Bio Singkat / Catatan Profil</label>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                        {tr('Bio Singkat / Catatan Profil', 'Short Bio / Profile Notes')}
+                      </label>
                       <textarea
                         rows={2}
                         value={myBio}
@@ -5349,7 +8243,7 @@ export function App() {
 
                     <div style={{ marginBottom: '16px' }}>
                       <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                        Ganti Password Baru (Kosongkan jika tidak ingin mengubah)
+                        {tr('Ganti Password Baru (Kosongkan jika tidak ingin mengubah)', 'New Password (Leave blank to keep current)')}
                       </label>
                       <input
                         type="password"
@@ -5365,7 +8259,7 @@ export function App() {
                       disabled={loading}
                       style={{ width: '100%', padding: '12px', borderRadius: '10px', background: 'var(--primary)', color: '#ffffff', fontWeight: 700, fontSize: '14px' }}
                     >
-                      Simpan Perubahan Profil Saya
+                      {loading ? tr('Menyimpan...', 'Saving...') : tr('Simpan Perubahan Profil Saya', 'Save Profile Changes')}
                     </button>
                   </form>
                 </div>
@@ -5375,7 +8269,7 @@ export function App() {
                   {/* My Assigned SPK Orders */}
                   <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                     <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '10px' }}>
-                      📋 Penugasan SPK Saya ({orders.filter((o) => o.current_technician_id === currentUser.id || (o.stage_runs || []).some((sr) => sr.technician_id === currentUser.id)).length})
+                      📋 {tr('Penugasan SPK Saya', 'My Assigned SPKs')} ({orders.filter((o) => o.current_technician_id === currentUser.id || (o.stage_runs || []).some((sr) => sr.technician_id === currentUser.id)).length})
                     </h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {orders
@@ -5391,7 +8285,7 @@ export function App() {
                                 {o.order_number} — {o.patient_name}
                               </div>
                               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                                {o.denture_type?.name} • Tahap: <strong>{o.current_stage_name || o.status}</strong>
+                                {o.denture_type?.name} • {tr('Tahap:', 'Stage:')} <strong>{o.current_stage_name || o.status}</strong>
                               </div>
                             </div>
                             <button
@@ -5402,13 +8296,13 @@ export function App() {
                               }}
                               style={{ background: 'var(--primary-subtle)', color: 'var(--primary)', padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700 }}
                             >
-                              Buka SPK
+                              {tr('Buka SPK', 'Open SPK')}
                             </button>
                           </div>
                         ))}
                       {orders.filter((o) => o.current_technician_id === currentUser.id || (o.stage_runs || []).some((sr) => sr.technician_id === currentUser.id)).length === 0 && (
                         <div style={{ fontSize: '12px', color: 'var(--text-subtle)', padding: '12px 0' }}>
-                          Belum ada SPK spesifik yang ditugaskan langsung ke akun ini.
+                          {tr('Belum ada SPK spesifik yang ditugaskan langsung ke akun ini.', 'No active SPK orders directly assigned to this account.')}
                         </div>
                       )}
                     </div>
@@ -5417,7 +8311,7 @@ export function App() {
                   {/* My Attendance & Overtime History */}
                   <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
                     <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '10px' }}>
-                      ⏰ Riwayat Absensi & Lembur Saya
+                      ⏰ {tr('Riwayat Absensi & Lembur Saya', 'My Attendance & Overtime History')}
                     </h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {attendances
@@ -5430,7 +8324,7 @@ export function App() {
                           >
                             <div>
                               <div style={{ fontWeight: 700, fontSize: '12px', color: 'var(--text-main)' }}>
-                                {new Date(a.attendance_date).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })} ({a.check_in} - {a.check_out})
+                                {new Date(a.attendance_date).toLocaleDateString(dateLocale, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })} ({a.check_in} - {a.check_out})
                               </div>
                               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{a.overtime_notes || a.shift_schedule}</div>
                             </div>
@@ -5440,7 +8334,7 @@ export function App() {
                               </span>
                               {a.overtime_hours > 0 && (
                                 <div style={{ fontSize: '11px', fontWeight: 800, color: '#d97706', marginTop: '2px' }}>
-                                  +{a.overtime_hours} Jam Lembur
+                                  +{a.overtime_hours} {tr('Jam Lembur', 'Hours OT')}
                                 </div>
                               )}
                             </div>
@@ -5905,15 +8799,15 @@ export function App() {
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: '560px' }}>
             <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '14px' }}>
-              {editingCustomer ? `Edit Master Dokter: ${editingCustomer.name}` : 'Tambah Master Dokter / Klinik Baru'}
+              {editingCustomer ? tr(`Edit Master Dokter: ${editingCustomer.name}`, `Edit Dentist Master: ${editingCustomer.name}`) : tr('Tambah Master Dokter / Klinik Baru', 'Add New Dentist / Clinic Master')}
             </h3>
             <form onSubmit={handleSaveCustomer}>
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Nama Dokter *</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Nama Dokter *', 'Dentist Name *')}</label>
                   <input
                     type="text"
-                    placeholder="drg. Nama Dokter, Sp.Pros"
+                    placeholder={tr("drg. Nama Dokter, Sp.Pros", "Dr. Dentist Name, DDS")}
                     value={newCustName}
                     onChange={(e) => setNewCustName(e.target.value)}
                     required
@@ -5921,10 +8815,10 @@ export function App() {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Nama Klinik / RS *</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Nama Klinik / RS *', 'Clinic / Hospital Name *')}</label>
                   <input
                     type="text"
-                    placeholder="Klinik Gigi / RS..."
+                    placeholder={tr("Klinik Gigi / RS...", "Dental Clinic / Hospital...")}
                     value={newCustClinic}
                     onChange={(e) => setNewCustClinic(e.target.value)}
                     required
@@ -5935,7 +8829,7 @@ export function App() {
 
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>No. WhatsApp *</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('No. WhatsApp *', 'WhatsApp Number *')}</label>
                   <input
                     type="text"
                     placeholder="0812xxxxxxxx"
@@ -5958,10 +8852,10 @@ export function App() {
               </div>
 
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Alamat Klinik / Pengiriman</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Alamat Klinik / Pengiriman', 'Clinic / Delivery Address')}</label>
                 <input
                   type="text"
-                  placeholder="Jl. ..."
+                  placeholder={tr("Jl. ...", "Street address...")}
                   value={newCustAddress}
                   onChange={(e) => setNewCustAddress(e.target.value)}
                   style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
@@ -5971,7 +8865,7 @@ export function App() {
               {/* Preferensi Dokter (Warna Gigi & Tipe Gigi Favorit) */}
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Preferensi Warna Gigi Favorit</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Preferensi Warna Gigi Favorit', 'Preferred Tooth Shade')}</label>
                   <select
                     value={newCustFavShade}
                     onChange={(e) => setNewCustFavShade(e.target.value)}
@@ -5985,7 +8879,7 @@ export function App() {
                   </select>
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Tipe Gigi Tiruan Favorit</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Tipe Gigi Tiruan Favorit', 'Preferred Denture Type')}</label>
                   <select
                     value={newCustFavType}
                     onChange={(e) => setNewCustFavType(e.target.value)}
@@ -6003,7 +8897,7 @@ export function App() {
               {/* Loyalty System & Diskon Pelanggan Tetap */}
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Loyalty Tier Pelanggan</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Loyalty Tier Pelanggan', 'Customer Loyalty Tier')}</label>
                   <select
                     value={newCustLoyaltyTier}
                     onChange={(e) => {
@@ -6016,14 +8910,14 @@ export function App() {
                     }}
                     style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                   >
-                    <option value="REGULAR">REGULAR (Diskon 0%)</option>
-                    <option value="SILVER">SILVER (Diskon Tetap 5%)</option>
-                    <option value="GOLD">GOLD (Diskon Tetap 10%)</option>
-                    <option value="VIP">VIP Partner (Diskon Tetap 15%)</option>
+                    <option value="REGULAR">{tr('REGULAR (Diskon 0%)', 'REGULAR (0% Discount)')}</option>
+                    <option value="SILVER">{tr('SILVER (Diskon Tetap 5%)', 'SILVER (5% Fixed Discount)')}</option>
+                    <option value="GOLD">{tr('GOLD (Diskon Tetap 10%)', 'GOLD (10% Fixed Discount)')}</option>
+                    <option value="VIP">{tr('VIP Partner (Diskon Tetap 15%)', 'VIP Partner (15% Fixed Discount)')}</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Diskon Otomatis SPK (%)</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Diskon Otomatis SPK (%)', 'Automatic Work Order Discount (%)')}</label>
                   <input
                     type="number"
                     min={0}
@@ -6037,11 +8931,11 @@ export function App() {
 
               <div style={{ marginBottom: '18px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                  Catatan Khusus Dokter (Preferensi Oklusi / Kontak / Anatomi)
+                  {tr('Catatan Khusus Dokter (Preferensi Oklusi / Kontak / Anatomi)', 'Dentist Special Notes (Occlusion / Contact / Anatomy)')}
                 </label>
                 <textarea
                   rows={2}
-                  placeholder="Contoh: Suka oklusi ringan, kontak proksimal rapat, margin servikal halus..."
+                  placeholder={tr("Contoh: Suka oklusi ringan, kontak proksimal rapat, margin servikal halus...", "Example: Prefers light occlusion, tight proximal contacts, smooth margins...")}
                   value={newCustNotes}
                   onChange={(e) => setNewCustNotes(e.target.value)}
                   style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
@@ -6069,12 +8963,12 @@ export function App() {
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: '520px' }}>
             <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '14px' }}>
-              {editingPatient ? `Edit Master Pasien: ${editingPatient.name}` : 'Tambah Master Data Pasien'}
+              {editingPatient ? tr(`Edit Master Pasien: ${editingPatient.name}`, `Edit Patient Master: ${editingPatient.name}`) : tr('Tambah Master Data Pasien', 'Add New Patient Master')}
             </h3>
             <form onSubmit={handleSavePatient}>
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                  Dokter / Klinik Pengirim *
+                  {tr('Dokter / Klinik Pengirim *', 'Referring Dentist / Clinic *')}
                 </label>
                 <select
                   value={patCustomerId}
@@ -6082,7 +8976,7 @@ export function App() {
                   required
                   style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                 >
-                  <option value="">-- Pilih Dokter / Klinik --</option>
+                  <option value="">{tr('-- Pilih Dokter / Klinik --', '-- Select Dentist / Clinic --')}</option>
                   {customers.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name} ({c.clinic_name})
@@ -6093,11 +8987,11 @@ export function App() {
 
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                  Nama Lengkap Pasien *
+                  {tr('Nama Lengkap Pasien *', 'Patient Full Name *')}
                 </label>
                 <input
                   type="text"
-                  placeholder="Contoh: Bpk. Hendra Gunawan"
+                  placeholder={tr("Contoh: Bpk. Hendra Gunawan", "Example: Mr. John Doe")}
                   value={patName}
                   onChange={(e) => setPatName(e.target.value)}
                   required
@@ -6107,18 +9001,18 @@ export function App() {
 
               <div className="grid-3col" style={{ gap: '10px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Jenis Kelamin</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Jenis Kelamin', 'Gender')}</label>
                   <select
                     value={patGender}
                     onChange={(e) => setPatGender(e.target.value)}
                     style={{ width: '100%', padding: '9px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                   >
-                    <option value="L">Laki-laki (L)</option>
-                    <option value="P">Perempuan (P)</option>
+                    <option value="L">{tr("Laki-laki (L)", "Male (M)")}</option>
+                    <option value="P">{tr("Perempuan (P)", "Female (F)")}</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Usia (Tahun)</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Usia (Tahun)', 'Age (Years)')}</label>
                   <input
                     type="number"
                     min={1}
@@ -6129,7 +9023,7 @@ export function App() {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Shade Gigi Pasien</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Shade Gigi Pasien', 'Patient Tooth Shade')}</label>
                   <select
                     value={patDefaultShade}
                     onChange={(e) => setPatDefaultShade(e.target.value)}
@@ -6146,7 +9040,7 @@ export function App() {
 
               <div className="grid-2col" style={{ gap: '10px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>No. Telepon Pasien (Opsional)</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('No. Telepon Pasien (Opsional)', 'Patient Phone (Optional)')}</label>
                   <input
                     type="text"
                     placeholder="0812..."
@@ -6156,10 +9050,10 @@ export function App() {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Riwayat Elemen Gigi</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Riwayat Elemen Gigi', 'Tooth Elements History')}</label>
                   <input
                     type="text"
-                    placeholder='Contoh: ["11","21"]'
+                    placeholder={tr('Contoh: ["11","21"]', 'Example: ["11","21"]')}
                     value={patLastTeeth}
                     onChange={(e) => setPatLastTeeth(e.target.value)}
                     style={{ width: '100%', padding: '9px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
@@ -6169,11 +9063,11 @@ export function App() {
 
               <div style={{ marginBottom: '18px' }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                  Catatan Klinis / Riwayat Alergi Bahan (Logam, Akrilik, dll)
+                  {tr('Catatan Klinis / Riwayat Alergi Bahan (Logam, Akrilik, dll)', 'Clinical Notes / Material Allergy History (Metal, Acrylic, etc.)')}
                 </label>
                 <textarea
                   rows={2}
-                  placeholder="Contoh: Alergi logam nikel (gunakan Valplast/Zirconia), riwayat bruxism..."
+                  placeholder={tr("Contoh: Alergi logam nikel (gunakan Valplast/Zirconia), riwayat bruxism...", "Example: Nickel metal allergy (use Valplast/Zirconia), history of bruxism...")}
                   value={patNotes}
                   onChange={(e) => setPatNotes(e.target.value)}
                   style={{ width: '100%', padding: '9px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
@@ -6201,12 +9095,12 @@ export function App() {
               ★ Catat Feedback / Evaluasi Dokter
             </h3>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-              SPK <strong>{feedbackOrder.order_number}</strong> — Dokter: <strong>{feedbackOrder.customer?.name}</strong> (Pasien: {feedbackOrder.patient_name})
+              SPK <strong>{feedbackOrder.order_number}</strong> — {tr('Dokter:', 'Doctor:')} <strong>{feedbackOrder.customer?.name}</strong> ({tr('Pasien:', 'Patient:')} {feedbackOrder.patient_name})
             </p>
             <form onSubmit={handleSaveFeedback}>
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>
-                  Rating Kepuasan Dokter (1 - 5 Bintang)
+                  {tr('Rating Kepuasan Dokter (1 - 5 Bintang)', 'Doctor Satisfaction Rating (1 - 5 Stars)')}
                 </label>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   {[1, 2, 3, 4, 5].map((star) => (
@@ -6233,11 +9127,11 @@ export function App() {
 
               <div style={{ marginBottom: '18px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>
-                  Catatan Feedback / Testimoni Dokter
+                  {tr('Catatan Feedback / Testimoni Dokter', 'Dentist Feedback Notes / Testimonial')}
                 </label>
                 <textarea
                   rows={3}
-                  placeholder="Contoh: Marginal fit sangat presisi, warna sesuai shade guide, insersi cepat tanpa grinding..."
+                  placeholder={tr("Contoh: Marginal fit sangat presisi, warna sesuai shade guide, insersi cepat tanpa grinding...", "Example: Marginal fit is very precise, shade matches well, quick insertion without grinding...")}
                   value={feedbackNotes}
                   onChange={(e) => setFeedbackNotes(e.target.value)}
                   style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
@@ -6249,7 +9143,7 @@ export function App() {
                   {t.cancelBtn}
                 </button>
                 <button type="submit" style={{ padding: '8px 20px', background: 'var(--primary)', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
-                  Simpan Feedback
+                  {tr('Simpan Feedback', 'Save Feedback')}
                 </button>
               </div>
             </form>
@@ -6262,12 +9156,12 @@ export function App() {
         <div className="modal-overlay">
           <div className="modal-content" style={{ maxWidth: '560px' }}>
             <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '14px' }}>
-              {editingItem ? `Edit Master Bahan: ${editingItem.name}` : 'Tambah Master Data Bahan / Produk'}
+              {editingItem ? tr(`Edit Master Bahan: ${editingItem.name}`, `Edit Material Master: ${editingItem.name}`) : tr('Tambah Master Data Bahan / Produk', 'Add New Material / Product Master')}
             </h3>
             <form onSubmit={handleSaveItem}>
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-                  Nama Bahan / Produk *
+                  {tr('Nama Bahan / Produk *', 'Material / Product Name *')}
                 </label>
                 <input
                   type="text"
@@ -6281,20 +9175,20 @@ export function App() {
 
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Kategori *</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Kategori *', 'Category *')}</label>
                   <select
                     value={itemCategory}
                     onChange={(e) => setItemCategory(e.target.value)}
                     style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                   >
-                    <option value="RAW_MATERIAL">RAW_MATERIAL (Bahan Baku)</option>
-                    <option value="PRODUCT">PRODUCT (Produk / Gigi Tiruan)</option>
-                    <option value="CONSUMABLE">CONSUMABLE (Habis Pakai)</option>
-                    <option value="TOOL">TOOL (Alat & Bur)</option>
+                    <option value="RAW_MATERIAL">{tr("RAW_MATERIAL (Bahan Baku)", "RAW_MATERIAL (Raw Material)")}</option>
+                    <option value="PRODUCT">{tr("PRODUCT (Produk / Gigi Tiruan)", "PRODUCT (Finished Product)")}</option>
+                    <option value="CONSUMABLE">{tr("CONSUMABLE (Habis Pakai)", "CONSUMABLE (Consumables)")}</option>
+                    <option value="TOOL">{tr("TOOL (Alat & Bur)", "TOOL (Tools & Bur Bits)")}</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Satuan *</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Satuan *', 'Unit *')}</label>
                   <select
                     value={itemUnitId}
                     onChange={(e) => setItemUnitId(Number(e.target.value))}
@@ -6310,14 +9204,14 @@ export function App() {
               </div>
 
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Supplier Utama</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Supplier Utama', 'Primary Supplier')}</label>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <select
                     value={itemSupplierId}
                     onChange={(e) => setItemSupplierId(e.target.value)}
                     style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                   >
-                    <option value="">-- Pilih Supplier --</option>
+                    <option value="">{tr('-- Pilih Supplier --', '-- Select Supplier --')}</option>
                     {suppliersList.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
@@ -6336,7 +9230,7 @@ export function App() {
 
               <div className="grid-3col" style={{ gap: '10px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Harga Beli (IDR) *</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Harga Beli (IDR) *', 'Purchase Price (IDR) *')}</label>
                   <input
                     type="number"
                     value={itemPrice}
@@ -6347,7 +9241,7 @@ export function App() {
                 </div>
                 {!editingItem && (
                   <div>
-                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Stok Awal</label>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Stok Awal', 'Initial Stock')}</label>
                     <input
                       type="number"
                       value={itemStock}
@@ -6358,7 +9252,7 @@ export function App() {
                   </div>
                 )}
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Min. Stok Aman *</label>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Min. Stok Aman *', 'Min. Safety Stock *')}</label>
                   <input
                     type="number"
                     value={itemMinStock}
@@ -6422,11 +9316,11 @@ export function App() {
           <div className="modal-content">
             <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '6px' }}>⬇ Catat Stok Masuk (Pembelian / Restock)</h3>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-              Menambah saldo stok bahan secara otomatis beserta pencatatan nomor Batch/Lot dan tanggal Expired.
+              {tr('Menambah saldo stok bahan secara otomatis beserta pencatatan nomor Batch/Lot dan tanggal Expired.', 'Automatically increases material stock balance and records Batch/Lot number and Expiry date.')}
             </p>
             <form onSubmit={handleStockIn}>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Pilih Bahan / Produk *</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Pilih Bahan / Produk *', 'Select Material / Product *')}</label>
                 <select
                   value={inItemId}
                   onChange={(e) => {
@@ -6440,7 +9334,7 @@ export function App() {
                   required
                   style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                 >
-                  <option value="">-- Pilih Bahan --</option>
+                  <option value="">{tr('-- Pilih Bahan --', '-- Select Material --')}</option>
                   {inventoryItems.map((itm) => (
                     <option key={itm.id} value={itm.id}>
                       {itm.name} (Stok: {itm.current_stock} {itm.unit?.code})
@@ -6451,7 +9345,7 @@ export function App() {
 
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Jumlah Masuk (Qty) *</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Jumlah Masuk (Qty) *', 'Quantity In (Qty) *')}</label>
                   <input
                     type="number"
                     value={inQty}
@@ -6463,7 +9357,7 @@ export function App() {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Harga Beli Satuan (IDR)</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Harga Beli Satuan (IDR)', 'Unit Purchase Price (IDR)')}</label>
                   <input
                     type="number"
                     value={inUnitCost}
@@ -6476,7 +9370,7 @@ export function App() {
 
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Nomor Batch / Lot</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Nomor Batch / Lot', 'Batch / Lot Number')}</label>
                   <input
                     type="text"
                     placeholder="Contoh: LOT-2026-11"
@@ -6486,7 +9380,7 @@ export function App() {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Tanggal Exp (Opsional)</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Tanggal Exp (Opsional)', 'Exp Date (Optional)')}</label>
                   <input
                     type="date"
                     value={inExpiryDate}
@@ -6497,7 +9391,7 @@ export function App() {
               </div>
 
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Catatan Penerimaan</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Catatan Penerimaan', 'Receipt Notes')}</label>
                 <input
                   type="text"
                   placeholder="Pembelian faktur supplier / restock gudang..."
@@ -6512,7 +9406,7 @@ export function App() {
                   {t.cancelBtn}
                 </button>
                 <button type="submit" style={{ padding: '8px 20px', background: '#10b981', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
-                  Simpan Stok Masuk
+                  {tr('Simpan Stok Masuk', 'Save Stock In')}
                 </button>
               </div>
             </form>
@@ -6526,11 +9420,11 @@ export function App() {
           <div className="modal-content">
             <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '6px' }}>⬆ Catat Pemakaian Bahan (Stok Keluar)</h3>
             <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-              Mengurangi stok secara otomatis dengan metode FEFO (batch yang mendekati expired dikurangi lebih dulu) dan mencatat riwayat penggunaan.
+              {tr('Mengurangi stok secara otomatis dengan metode FEFO (batch yang mendekati expired dikurangi lebih dulu) dan mencatat riwayat penggunaan.', 'Automatically deducts stock using FEFO (nearest expiry first) and logs usage history.')}
             </p>
             <form onSubmit={handleStockOut}>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Pilih Bahan yang Digunakan *</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Pilih Bahan yang Digunakan *', 'Select Material to Use *')}</label>
                 <select
                   value={outItemId}
                   onChange={(e) => {
@@ -6551,7 +9445,7 @@ export function App() {
 
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Jumlah Pemakaian (Qty) *</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Jumlah Pemakaian (Qty) *', 'Usage Quantity (Qty) *')}</label>
                   <input
                     type="number"
                     value={outQty}
@@ -6563,13 +9457,13 @@ export function App() {
                   />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Batch / Lot (Otomatis FEFO)</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Batch / Lot (Otomatis FEFO)', 'Batch / Lot (Automatic FEFO)')}</label>
                   <select
                     value={outBatchId}
                     onChange={(e) => setOutBatchId(e.target.value)}
                     style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                   >
-                    <option value="">Otomatis (Exp Terdekat / FEFO)</option>
+                    <option value="">{tr('Otomatis (Exp Terdekat / FEFO)', 'Automatic (Nearest Exp / FEFO)')}</option>
                     {inventoryBatches
                       .filter((b) => b.item_id === outItemId && b.current_quantity > 0)
                       .map((b) => (
@@ -6582,13 +9476,13 @@ export function App() {
               </div>
 
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Kaitkan dengan No. SPK Produksi (Opsional)</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Kaitkan dengan No. SPK Produksi (Opsional)', 'Link to SPK Work Order (Optional)')}</label>
                 <select
                   value={outOrderId}
                   onChange={(e) => setOutOrderId(e.target.value)}
                   style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                 >
-                  <option value="">-- Pemakaian Umum / Tanpa SPK Spesifik --</option>
+                  <option value="">{tr('-- Pemakaian Umum / Tanpa SPK Spesifik --', '-- General Lab Usage / No Specific SPK --')}</option>
                   {orders.map((o) => (
                     <option key={o.id} value={o.id}>
                       {o.order_number} — Pasien: {o.patient_name} ({o.denture_type?.name})
@@ -6598,7 +9492,7 @@ export function App() {
               </div>
 
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Catatan Pemakaian Teknisi</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Catatan Pemakaian Teknisi', 'Technician Usage Notes')}</label>
                 <input
                   type="text"
                   placeholder="Contoh: Pengecoran model kerja / packing akrilik SPK..."
@@ -6625,10 +9519,10 @@ export function App() {
       {showSupplierModal && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '14px' }}>Tambah Supplier Bahan Dental</h3>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '14px' }}>{tr('Tambah Supplier Bahan Dental', 'Add Dental Material Supplier')}</h3>
             <form onSubmit={handleSaveSupplier}>
               <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Nama Perusahaan Supplier *</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Nama Perusahaan Supplier *', 'Supplier Company Name *')}</label>
                 <input
                   type="text"
                   placeholder="PT / CV Dental Supply..."
@@ -6763,7 +9657,7 @@ export function App() {
               </div>
 
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>Catatan Pengajuan</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>{tr('Catatan Pengajuan', 'Request Notes')}</label>
                 <textarea
                   rows={2}
                   placeholder="Kebutuhan stok mendesak untuk produksi mahkota..."
@@ -6778,7 +9672,7 @@ export function App() {
                   {t.cancelBtn}
                 </button>
                 <button type="submit" style={{ padding: '8px 20px', background: 'var(--primary)', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
-                  Kirim ke Owner
+                  {tr('Kirim ke Owner', 'Submit to Owner')}
                 </button>
               </div>
             </form>
@@ -6790,14 +9684,14 @@ export function App() {
       {selectedInvoice && (
         <div className="modal-overlay">
           <div className="modal-content">
-            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>Catat Pembayaran Tagihan</h3>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>{tr('Catat Pembayaran Tagihan', 'Record Invoice Payment')}</h3>
             <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
               {selectedInvoice.invoice_number} — Sisa: <strong style={{ color: '#dc2626' }}>{formatRupiah(selectedInvoice.balance_due)}</strong>
             </p>
 
             <form onSubmit={handleRecordPayment}>
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>Nominal Pembayaran (IDR)</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>{tr('Nominal Pembayaran (IDR)', 'Payment Amount (IDR)')}</label>
                 <input
                   type="number"
                   value={paymentAmount}
@@ -6808,27 +9702,27 @@ export function App() {
 
               <div className="grid-2col" style={{ gap: '12px', marginBottom: '14px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>Metode Bayar</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>{tr('Metode Bayar', 'Payment Method')}</label>
                   <select
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value)}
                     style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                   >
-                    <option value="BANK_TRANSFER">Transfer Bank</option>
-                    <option value="CASH">Tunai (Cash)</option>
+                    <option value="BANK_TRANSFER">{tr("Transfer Bank", "Bank Transfer")}</option>
+                    <option value="CASH">{tr("Tunai (Cash)", "Cash")}</option>
                     <option value="QRIS">QRIS</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>Jenis Bayar</label>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>{tr('Jenis Bayar', 'Payment Type')}</label>
                   <select
                     value={paymentType}
                     onChange={(e) => setPaymentType(e.target.value)}
                     style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
                   >
-                    <option value="PARTIAL">Cicilan / Bertahap</option>
-                    <option value="DEPOSIT">Uang Muka (DP)</option>
-                    <option value="FINAL">Pelunasan</option>
+                    <option value="PARTIAL">{tr("Cicilan / Bertahap", "Installment / Partial")}</option>
+                    <option value="DEPOSIT">{tr("Uang Muka (DP)", "Deposit (DP)")}</option>
+                    <option value="FINAL">{tr("Pelunasan", "Full Settlement")}</option>
                   </select>
                 </div>
               </div>
@@ -6838,10 +9732,652 @@ export function App() {
                   {t.cancelBtn}
                 </button>
                 <button type="submit" style={{ padding: '8px 20px', background: 'var(--primary)', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
-                  Konfirmasi Pembayaran
+                  {tr('Konfirmasi Pembayaran', 'Confirm Payment')}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+`
+
+      {/* Modal Preview & Cetak Nota Invoice Pembayaran + Hasil Order Produksi */}
+      {viewingInvoice && (
+        <div className="modal-overlay" onClick={() => setViewingInvoice(null)}>
+          <div
+            className="modal-content"
+            style={{ maxWidth: '720px', width: '95%', maxHeight: '90vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const orderObj =
+                viewingInvoice.production_order || orders.find((o) => o.id === viewingInvoice.production_order_id)
+              const qcPassedObj = orderObj?.quality_checks?.find((q) => q.passed) || orderObj?.quality_checks?.[0]
+              return (
+                <div>
+                  {/* Header Dokumen Nota Invoice & Hasil Order */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'flex-start',
+                      borderBottom: '2px solid var(--border-light)',
+                      paddingBottom: '14px',
+                      marginBottom: '16px',
+                      flexWrap: 'wrap',
+                      gap: '12px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--primary)', letterSpacing: '0.5px' }}>
+                        DENTAL LABORATORY MANAGEMENT SYSTEM
+                      </div>
+                      <h3 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-main)', marginTop: '2px' }}>
+                        {tr('NOTA INVOICE & BUKTI HASIL ORDER', 'OFFICIAL INVOICE & ORDER PROOF')}
+                      </h3>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr('No. Invoice:', 'Invoice No:')} <strong style={{ color: 'var(--primary)' }}>{viewingInvoice.invoice_number}</strong> &bull; {tr('Tgl Terbit:', 'Issue Date:')}{' '}
+                        {new Date(viewingInvoice.issue_date).toLocaleDateString(dateLocale)}
+                      </div>
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '6px 14px',
+                          borderRadius: '999px',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          background:
+                            viewingInvoice.status === 'PAID'
+                              ? '#dcfce7'
+                              : viewingInvoice.status === 'PARTIALLY_PAID'
+                              ? '#fef3c7'
+                              : '#fee2e2',
+                          color:
+                            viewingInvoice.status === 'PAID'
+                              ? '#15803d'
+                              : viewingInvoice.status === 'PARTIALLY_PAID'
+                              ? '#b45309'
+                              : '#dc2626',
+                        }}
+                      >
+                        {viewingInvoice.status === 'PAID'
+                          ? tr('✓ LUNAS (PAID)', '✓ PAID IN FULL')
+                          : viewingInvoice.status === 'PARTIALLY_PAID'
+                          ? tr('⏳ CICILAN (PARTIALLY PAID)', '⏳ PARTIALLY PAID')
+                          : tr('⚠️ BELUM BAYAR (UNPAID)', '⚠️ UNPAID')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Bagian 1: Data Pelanggan Dokter & Identitas SPK Pasien */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: '12px',
+                      padding: '12px',
+                      borderRadius: '10px',
+                      background: 'var(--bg-surface)',
+                      border: '1px solid var(--border-light)',
+                      marginBottom: '16px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        {tr('Tagihan Kepada (Dokter / Klinik):', 'Billed To (Dentist / Clinic):')}
+                      </div>
+                      <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)', marginTop: '2px' }}>
+                        {viewingInvoice.customer?.name || orderObj?.customer?.name || '-'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {viewingInvoice.customer?.clinic_name || orderObj?.customer?.clinic_name || '-'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        WA/Telp: {viewingInvoice.customer?.phone || orderObj?.customer?.phone || '-'}
+                      </div>
+                      {viewingInvoice.customer?.address && (
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          {viewingInvoice.customer?.address}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        {tr('Rujukan Pesanan & Pasien (SPK):', 'Work Order & Patient Reference:')}
+                      </div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--primary)', marginTop: '2px' }}>
+                        {orderObj?.order_number || viewingInvoice.production_order_id || '-'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-main)' }}>
+                        {tr('Nama Pasien:', 'Patient Name:')} <strong>{orderObj?.patient_name || '-'}</strong>
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr('Jenis Gigi:', 'Denture Type:')} {orderObj?.denture_type?.name || '-'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        Shade: <strong>{orderObj?.shade_guide || '-'}</strong> | {tr('Elemen Gigi:', 'Teeth Element:')}{' '}
+                        {orderObj?.teeth_numbers || '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bagian 2: Rincian Tagihan Pekerjaan Laboratorium */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '6px' }}>
+                      {tr('Rincian Biaya Pembuatan Gigi Tiruan:', 'Denture Fabrication Fee Breakdown:')}
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                      <thead>
+                        <tr style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-light)', textAlign: 'left' }}>
+                          <th style={{ padding: '8px 10px', color: 'var(--text-muted)' }}>{tr('Deskripsi Pekerjaan', 'Work Description')}</th>
+                          <th style={{ padding: '8px 10px', color: 'var(--text-muted)', textAlign: 'center' }}>Qty</th>
+                          <th style={{ padding: '8px 10px', color: 'var(--text-muted)', textAlign: 'right' }}>{tr('Harga Satuan', 'Unit Price')}</th>
+                          <th style={{ padding: '8px 10px', color: 'var(--text-muted)', textAlign: 'right' }}>{tr('Subtotal', 'Subtotal')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {viewingInvoice.items && viewingInvoice.items.length > 0 ? (
+                          viewingInvoice.items.map((item) => (
+                            <tr key={item.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                              <td style={{ padding: '10px', color: 'var(--text-main)', fontWeight: 600 }}>{item.description}</td>
+                              <td style={{ padding: '10px', textAlign: 'center', color: 'var(--text-main)' }}>{item.quantity}</td>
+                              <td style={{ padding: '10px', textAlign: 'right', color: 'var(--text-main)' }}>
+                                {formatRupiah(item.unit_price)}
+                              </td>
+                              <td style={{ padding: '10px', textAlign: 'right', fontWeight: 700, color: 'var(--text-main)' }}>
+                                {formatRupiah(item.subtotal)}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr style={{ borderBottom: '1px solid var(--border-light)' }}>
+                            <td style={{ padding: '10px', color: 'var(--text-main)', fontWeight: 600 }}>
+                              {orderObj?.denture_type?.name || tr('Pembuatan Gigi Tiruan', 'Denture Fabrication')}
+                            </td>
+                            <td style={{ padding: '10px', textAlign: 'center' }}>1</td>
+                            <td style={{ padding: '10px', textAlign: 'right' }}>
+                              {formatRupiah(viewingInvoice.subtotal || viewingInvoice.total_amount)}
+                            </td>
+                            <td style={{ padding: '10px', textAlign: 'right', fontWeight: 700 }}>
+                              {formatRupiah(viewingInvoice.subtotal || viewingInvoice.total_amount)}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Bagian 3: Foto Dokumentasi Hasil Akhir & Ringkasan Pembayaran */}
+                  <div className="grid-2col" style={{ gap: '16px', marginBottom: '16px', alignItems: 'start' }}>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '6px' }}>
+                        📷 {tr('Dokumentasi Hasil Akhir & Riwayat Pembayaran:', 'Final Output Photos & Payment History:')}
+                      </div>
+                      {orderObj?.attachments && orderObj.attachments.length > 0 ? (
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                          {orderObj.attachments.map((att) => {
+                            const rawPath = att.stored_file_path || ''
+                            const url = rawPath.startsWith('http') ? rawPath : ('http://127.0.0.1:8080' + (rawPath.startsWith('/') ? '' : '/') + rawPath)
+                            return (
+                              <a
+                                key={att.id}
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  display: 'block',
+                                  width: '90px',
+                                  padding: '4px',
+                                  borderRadius: '8px',
+                                  border: '1px solid var(--border-light)',
+                                  background: 'var(--bg-surface)',
+                                }}
+                              >
+                                <img
+                                  src={url}
+                                  alt={att.file_name}
+                                  style={{ width: '100%', height: '60px', objectFit: 'cover', borderRadius: '4px' }}
+                                />
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--primary)', marginTop: '2px' }}>
+                                  {att.attachment_type}
+                                </div>
+                              </a>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                          {tr('Catatan:', 'Notes:')} {viewingInvoice.notes || orderObj?.doctor_notes || tr('Hasil produksi telah melewati tahapan QC akhir.', 'Production output passed final QC inspection.')}
+                        </div>
+                      )}
+
+                      {viewingInvoice.payments && viewingInvoice.payments.length > 0 && (
+                        <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '4px' }}>
+                            {tr('Riwayat Pembayaran Masuk:', 'Recorded Payment History:')}
+                          </div>
+                          {viewingInvoice.payments.map((p) => (
+                            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+                              <span>{new Date(p.payment_date).toLocaleDateString(dateLocale)} ({p.payment_method})</span>
+                              <strong style={{ color: '#10b981' }}>{formatRupiah(p.amount)}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Ringkasan Subtotal, Diskon Loyalty, dan Sisa Tagihan */}
+                    <div
+                      style={{
+                        padding: '12px 14px',
+                        borderRadius: '10px',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-light)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>{tr('Subtotal Tagihan:', 'Subtotal:')}</span>
+                        <span style={{ fontWeight: 600 }}>{formatRupiah(viewingInvoice.subtotal || viewingInvoice.total_amount)}</span>
+                      </div>
+                      {viewingInvoice.discount_amount > 0 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px', color: '#10b981' }}>
+                          <span>{tr('Diskon Loyalty Pelanggan:', 'Customer Loyalty Discount:')}</span>
+                          <span style={{ fontWeight: 700 }}>- {formatRupiah(viewingInvoice.discount_amount)}</span>
+                        </div>
+                      )}
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '14px',
+                          fontWeight: 800,
+                          borderTop: '1px dashed var(--border-light)',
+                          paddingTop: '6px',
+                          marginBottom: '6px',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        <span>{tr('Total Tagihan Bersih:', 'Net Total Due:')}</span>
+                        <span style={{ color: 'var(--primary)' }}>{formatRupiah(viewingInvoice.total_amount)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>{tr('Sudah Dibayar (DP/Cicilan):', 'Paid (Deposit/Partial):')}</span>
+                        <span style={{ fontWeight: 700, color: '#10b981' }}>{formatRupiah(viewingInvoice.paid_amount)}</span>
+                      </div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '13px',
+                          fontWeight: 800,
+                          borderTop: '1px solid var(--border-light)',
+                          paddingTop: '6px',
+                          color: viewingInvoice.balance_due > 0 ? '#dc2626' : '#10b981',
+                        }}
+                      >
+                        <span>{tr('Sisa Tagihan (Piutang):', 'Outstanding Balance Due:')}</span>
+                        <span>{formatRupiah(viewingInvoice.balance_due)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* QC Verification Card */}
+                  {qcPassedObj && (
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        background: '#ecfdf5',
+                        border: '1px solid #a7f3d0',
+                        fontSize: '12px',
+                        color: '#065f46',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: '16px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <CheckCircle2 size={16} color="#059669" />
+                        <span>
+                          {tr('Lolos Pemeriksaan Mutu (QC)', 'Passed Quality Control (QC)')} &bull; {qcPassedObj.defect_notes || tr('Sesuai spesifikasi dokter pengirim', 'Compliant with dentist specifications')}
+                        </span>
+                      </div>
+                      <span style={{ fontWeight: 700, fontSize: '11px' }}>
+                        QC Passed: {new Date(qcPassedObj.checked_at || new Date()).toLocaleDateString(dateLocale)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      style={{
+                        padding: '8px 16px',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-light)',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        color: 'var(--text-main)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      🖨️ {tr('Cetak Nota Invoice (PDF / Print)', 'Print Invoice (PDF / Print)')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewingInvoice(null)}
+                      style={{
+                        padding: '8px 20px',
+                        background: 'var(--primary)',
+                        color: '#ffffff',
+                        borderRadius: '8px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {tr('Tutup', 'Close')}
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Modal Catat Pengeluaran & Biaya Produksi */}
+      {showExpenseModal && (
+        <div className="modal-overlay" onClick={() => setShowExpenseModal(false)}>
+          <div
+            className="modal-content"
+            style={{ maxWidth: '520px', width: '95%' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)' }}>
+                {tr('Catat Biaya Operasional & Produksi', 'Record Operating & Production Expenses')}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowExpenseModal(false)}
+                style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-muted)', background: 'transparent' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateExpense}>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {tr('Kategori Pengeluaran *', 'Expense Category *')}
+                </label>
+                <select
+                  value={expCategoryId}
+                  onChange={(e) => setExpCategoryId(Number(e.target.value))}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-light)',
+                    fontSize: '13px',
+                    background: 'var(--bg-card)',
+                    color: 'var(--text-main)',
+                  }}
+                  required
+                >
+                  {expenseCategories && expenseCategories.length > 0 ? (
+                    expenseCategories.map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.name} ({cat.code})
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value={1}>{tr('Bahan Baku Produksi', 'Raw Materials (Direct Material)')}</option>
+                      <option value={2}>{tr('Gaji & Lembur Teknisi (Labor)', 'Technician Wages & Overtime (Labor)')}</option>
+                      <option value={3}>{tr('Listrik, Air & Gas Lab (Overhead)', 'Utilities & Electricity (Overhead)')}</option>
+                      <option value={4}>{tr('Maintenance Alat & Burnout Furnace', 'Equipment Maintenance & Furnace')}</option>
+                      <option value={5}>{tr('Logistik & Kurir Pengiriman', 'Logistics & Delivery Courier')}</option>
+                      <option value={6}>{tr('Operasional & ATK Kantor', 'Office & Administration')}</option>
+                      <option value={7}>{tr('Lain-lain', 'Other')}</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              <div className="grid-2col" style={{ gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                    {tr('Jumlah Nominal (IDR) *', 'Expense Amount (IDR) *')}
+                  </label>
+                  <input
+                    type="number"
+                    value={expAmount}
+                    onChange={(e) => setExpAmount(Number(e.target.value))}
+                    min={100}
+                    step="any"
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-light)',
+                      fontSize: '13px',
+                      background: 'var(--bg-card)',
+                      color: 'var(--text-main)',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                    {tr('Tanggal Pengeluaran *', 'Expense Date *')}
+                  </label>
+                  <input
+                    type="date"
+                    value={expDate}
+                    onChange={(e) => setExpDate(e.target.value)}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-light)',
+                      fontSize: '13px',
+                      background: 'var(--bg-card)',
+                      color: 'var(--text-main)',
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {tr('Keterangan / Deskripsi Biaya *', 'Expense Description *')}
+                </label>
+                <input
+                  type="text"
+                  placeholder={tr('Contoh: Beli mata bur tambahan / servis furnace...', 'Example: Purchased additional bur bits / furnace maintenance...')}
+                  value={expDesc}
+                  onChange={(e) => setExpDesc(e.target.value)}
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-light)',
+                    fontSize: '13px',
+                    background: 'var(--bg-card)',
+                    color: 'var(--text-main)',
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowExpenseModal(false)}
+                  style={{
+                    padding: '8px 16px',
+                    background: 'var(--bg-surface)',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: 'var(--text-muted)',
+                  }}
+                >
+                  {t.cancelBtn}
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    padding: '8px 20px',
+                    background: 'var(--primary)',
+                    color: '#ffffff',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                  }}
+                >
+                  {tr('Simpan Biaya', 'Save Expense')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Akses Online Web / Mobile: Update Status SPK Cepat dari Mana Saja */}
+      {showQuickMobileModal && (
+        <div className="modal-overlay" onClick={() => setShowQuickMobileModal(false)}>
+          <div
+            className="modal-content"
+            style={{ maxWidth: '640px', width: '95%', maxHeight: '88vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+              <div>
+                <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Smartphone size={18} color="#059669" /> {tr('Mode Update Status Cepat (Web / Mobile)', 'Quick Status Update Mode (Web / Mobile)')}
+                </h3>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  {tr('Memudahkan teknisi, admin, atau kurir mengupdate status pengerjaan SPK dari HP maupun web di mana saja.', 'Allows technicians, admins, and couriers to update SPK work order status quickly from mobile or web.')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuickMobileModal(false)}
+                style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-muted)', background: 'transparent' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {orders.map((ord) => (
+                <div
+                  key={ord.id}
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: '12px',
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border-light)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
+                    <div>
+                      <span style={{ fontWeight: 800, color: 'var(--primary)', fontSize: '14px' }}>{ord.order_number}</span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)', marginLeft: '8px' }}>
+                        {tr('Pasien:', 'Patient:')} {ord.patient_name}
+                      </span>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                        {ord.denture_type?.name} &bull; {tr('Dokter:', 'Doctor:')} {ord.customer?.name} ({ord.customer?.clinic_name})
+                      </div>
+                    </div>
+                    <span
+                      style={{
+                        padding: '3px 9px',
+                        borderRadius: '999px',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        background:
+                          ord.status === 'COMPLETED' || ord.status === 'DELIVERED'
+                            ? '#dcfce7'
+                            : ord.status === 'QC_PENDING'
+                            ? '#fef3c7'
+                            : '#e0f2fe',
+                        color:
+                          ord.status === 'COMPLETED' || ord.status === 'DELIVERED'
+                            ? '#15803d'
+                            : ord.status === 'QC_PENDING'
+                            ? '#b45309'
+                            : '#0369a1',
+                      }}
+                    >
+                      {ord.current_stage_name || ord.status}
+                    </span>
+                  </div>
+
+                  {/* Quick 1-Tap Status Buttons */}
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+                    {[
+                      { code: 'INTAKE', label: tr('📥 Order Masuk', '📥 Order Intake') },
+                      { code: 'IN_PRODUCTION', label: tr('⚙️ Dalam Proses', '⚙️ In Production') },
+                      { code: 'QC_PENDING', label: tr('🔍 Siap QC', '🔍 Ready for QC') },
+                      { code: 'COMPLETED', label: tr('✓ Selesai (+Auto Invoice)', '✓ Completed (+Auto Invoice)') },
+                      { code: 'DELIVERED', label: tr('🚚 Dikirim ke Dokter', '🚚 Delivered to Doctor') },
+                    ].map((st) => {
+                      const active = ord.status === st.code
+                      return (
+                        <button
+                          key={st.code}
+                          type="button"
+                          disabled={active || loading}
+                          onClick={() => handleChangeOrderStatus(ord.id, st.code)}
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: '8px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: active ? 'var(--primary)' : 'var(--bg-card)',
+                            color: active ? '#ffffff' : 'var(--text-main)',
+                            border: active ? 'none' : '1px solid var(--border-light)',
+                          }}
+                        >
+                          {st.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+              <button
+                type="button"
+                onClick={() => setShowQuickMobileModal(false)}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: '8px',
+                  background: 'var(--primary)',
+                  color: '#ffffff',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                }}
+              >
+                {tr('Selesai', 'Done')}
+              </button>
+            </div>
           </div>
         </div>
       )}

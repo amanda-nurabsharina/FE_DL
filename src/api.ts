@@ -22,6 +22,7 @@ export interface User {
   work_schedule?: string
   address?: string
   join_date?: string
+  updated_at?: string
   bio?: string
   is_active: boolean
   role_id?: number
@@ -180,6 +181,105 @@ export interface ProductionOrder {
   created_at: string
 }
 
+export interface ProductionPeriodChartItem {
+  period: string
+  total_orders: number
+  completed_orders: number
+  active_orders: number
+  revenue: number
+}
+
+export interface TopCustomerItem {
+  customer_id: string
+  doctor_name: string
+  clinic_name: string
+  phone: string
+  loyalty_tier: string
+  total_orders: number
+  total_revenue: number
+}
+
+export interface TopProductItem {
+  denture_type_id: number
+  product_name: string
+  category: string
+  total_orders: number
+  total_revenue: number
+  percentage: number
+}
+
+export interface CostRevenueAnalysis {
+  total_revenue: number
+  paid_revenue: number
+  material_cost: number
+  labor_cost: number
+  operational_cost: number
+  total_cost: number
+  gross_profit: number
+  net_profit: number
+  profit_margin_pct: number
+}
+
+export interface SystemAlert {
+  id: string
+  category: 'LATE_PRODUCTION' | 'LOW_STOCK' | 'OVERDUE_INVOICE' | string
+  severity: 'CRITICAL' | 'WARNING' | string
+  title: string
+  description: string
+  reference_code: string
+  reference_id: string
+  target_tab: string
+  days_diff: number
+  amount_or_qty: number
+}
+
+export interface BackupLog {
+  id: string
+  backup_name: string
+  backup_type: string
+  total_records: number
+  size_kb: number
+  created_by: string
+  status: string
+  created_at: string
+}
+
+export interface BackupInfoSummary {
+  database_status: string
+  auto_backup: boolean
+  last_backup_at: string
+  total_records: number
+  table_counts: Record<string, number>
+  backup_history: BackupLog[]
+}
+
+export interface UserActivityLog {
+  id: string
+  user_id: string
+  username: string
+  full_name: string
+  role_name: string
+  action_type: 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'BACKUP' | string
+  module_name: 'PRODUKSI_SPK' | 'DOKTER_PASIEN' | 'STOK_BAHAN' | 'KEUANGAN_INVOICE' | 'SDM_ABSENSI' | 'KEAMANAN_SISTEM' | string
+  target_entity: string
+  description: string
+  changed_data: string
+  ip_address: string
+  http_method: string
+  endpoint: string
+  created_at: string
+}
+
+export interface ActivityLogSummary {
+  total_logs: number
+  create_count: number
+  update_count: number
+  delete_count: number
+  login_count: number
+  active_users_today: number
+  logs: UserActivityLog[]
+}
+
 export interface DashboardSummary {
   active_orders_count: number
   qc_pending_count: number
@@ -189,7 +289,15 @@ export interface DashboardSummary {
   net_operating_income: number
   total_receivables: number
   low_stock_count: number
+  late_orders_count?: number
+  overdue_invoices_count?: number
   recent_orders: ProductionOrder[]
+  weekly_production?: ProductionPeriodChartItem[]
+  monthly_production?: ProductionPeriodChartItem[]
+  top_customers?: TopCustomerItem[]
+  top_products?: TopProductItem[]
+  cost_vs_revenue?: CostRevenueAnalysis
+  auto_alerts?: SystemAlert[]
 }
 
 export interface UnitOfMeasure {
@@ -295,9 +403,36 @@ export interface PurchaseRequest {
   created_at: string
 }
 
+export interface InvoiceItem {
+  id: string
+  invoice_id: string
+  description: string
+  quantity: number
+  unit_price: number
+  discount: number
+  subtotal: number
+  line_total: number
+}
+
+export interface PaymentRecord {
+  id: string
+  payment_number: string
+  invoice_id?: string
+  customer_id: string
+  amount: number
+  payment_method: string
+  payment_type: string
+  payment_date: string
+  reference_number?: string
+  notes?: string
+  created_at: string
+}
+
 export interface Invoice {
   id: string
   invoice_number: string
+  production_order_id?: string
+  customer_id?: string
   customer: Customer
   issue_date: string
   due_date: string
@@ -308,22 +443,58 @@ export interface Invoice {
   balance_due: number
   status: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID' | 'OVERPAID' | 'VOID'
   notes: string
-  production_order?: {
-    id: string
-    order_number: string
-    patient_name: string
-    teeth_numbers: string
-  }
+  items?: InvoiceItem[]
+  payments?: PaymentRecord[]
+  production_order?: ProductionOrder
+}
+
+export interface ExpenseCategory {
+  id: number
+  code: string
+  name: string
 }
 
 export interface Expense {
   id: string
   expense_number: string
-  category: { name: string; code: string }
+  category_id: number
+  category: ExpenseCategory
   amount: number
   expense_date: string
   description: string
   created_at: string
+}
+
+export interface SalesPeriodItem {
+  period: string
+  orders_count: number
+  active_customers: number
+  omzet: number
+  paid_amount: number
+  unpaid_amount: number
+}
+
+export interface FinanceReportSummary {
+  daily_omzet: number
+  daily_orders_count: number
+  monthly_omzet: number
+  monthly_orders_count: number
+  total_invoiced: number
+  total_paid: number
+  total_receivables: number
+  total_invoices_count: number
+  paid_invoices_count: number
+  unpaid_invoices_count: number
+  material_cost: number
+  labor_cost: number
+  operational_cost: number
+  total_expenses: number
+  gross_profit: number
+  net_operating_profit: number
+  active_customers_count: number
+  total_customers_count: number
+  daily_breakdown: SalesPeriodItem[]
+  monthly_breakdown: SalesPeriodItem[]
 }
 
 export const api = {
@@ -580,7 +751,10 @@ export const api = {
     })
   },
 
-  // Finance
+  // Finance & Sales
+  async getFinanceSummary() {
+    return this.request<FinanceReportSummary>('/finance/summary')
+  },
   async getInvoices(status = '', search = '') {
     return this.request<Invoice[]>(`/finance/invoices?status=${status}&search=${encodeURIComponent(search)}`)
   },
@@ -590,11 +764,19 @@ export const api = {
       body: JSON.stringify(data),
     })
   },
+  async syncInvoicesFromProduction() {
+    return this.request<{ synced_count: number; message: string }>('/finance/invoices/sync', {
+      method: 'POST',
+    })
+  },
   async recordPayment(data: any) {
     return this.request('/finance/payments', {
       method: 'POST',
       body: JSON.stringify(data),
     })
+  },
+  async getExpenseCategories() {
+    return this.request<ExpenseCategory[]>('/finance/expense-categories')
   },
   async getExpenses() {
     return this.request<Expense[]>('/finance/expenses')
@@ -716,5 +898,40 @@ export const api = {
     const json = await res.json()
     if (!res.ok) throw new Error(json.message || 'Gagal mengunggah logo')
     return json.logo_url as string
+  },
+
+  // Backup & Restore System Data
+  async getBackupInfo() {
+    return this.request<BackupInfoSummary>('/reports/backup/info')
+  },
+  async createBackupSnapshot(backupType = 'MANUAL_FULL_BACKUP', createdBy = '') {
+    const token = this.getToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(`${BASE_URL}/reports/backup/create`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ backup_type: backupType, created_by: createdBy }),
+    })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.message || json.error || 'Gagal membuat backup data')
+    return json as { success: boolean; log: BackupLog; snapshot: Record<string, any> }
+  },
+  async restoreBackupSnapshot(payload: Record<string, any>) {
+    return this.request<BackupLog>('/reports/backup/restore', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  },
+
+  // Security Module: User Activity Logs (Audit Trail)
+  async getActivityLogs(module = '', actionType = '', username = '', search = '') {
+    const params = new URLSearchParams()
+    if (module) params.set('module', module)
+    if (actionType) params.set('action_type', actionType)
+    if (username) params.set('username', username)
+    if (search) params.set('search', search)
+    const qs = params.toString()
+    return this.request<ActivityLogSummary>(`/reports/activity-logs${qs ? `?${qs}` : ''}`)
   },
 }

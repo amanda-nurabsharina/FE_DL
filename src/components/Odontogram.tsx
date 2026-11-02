@@ -4,9 +4,11 @@ interface OdontogramProps {
   selectedTeeth: string[]
   onChange: (teeth: string[]) => void
   readOnly?: boolean
+  lang?: 'id' | 'en'
 }
 
-export const Odontogram: React.FC<OdontogramProps> = ({ selectedTeeth, onChange, readOnly = false }) => {
+export const Odontogram: React.FC<OdontogramProps> = ({ selectedTeeth, onChange, readOnly = false, lang = 'id' }) => {
+  const isEn = lang === 'en'
   // Adult Permanent Teeth (FDI System)
   const upperRight = ['18', '17', '16', '15', '14', '13', '12', '11']
   const upperLeft = ['21', '22', '23', '24', '25', '26', '27', '28']
@@ -31,7 +33,7 @@ export const Odontogram: React.FC<OdontogramProps> = ({ selectedTeeth, onChange,
         onClick={() => toggleTooth(tooth)}
         disabled={readOnly}
         className={`tooth-btn ${isSelected ? 'selected' : ''}`}
-        title={`Gigi ${tooth}`}
+        title={isEn ? `Tooth ${tooth}` : `Gigi ${tooth}`}
       >
         <span style={{ fontSize: '10px', opacity: 0.7 }}>#{tooth}</span>
         <svg width="18" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -45,16 +47,24 @@ export const Odontogram: React.FC<OdontogramProps> = ({ selectedTeeth, onChange,
     <div style={{ background: 'var(--bg-surface)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-light)', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
       <div style={{ minWidth: '580px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-main)' }}>Odontogram (Pilih Elemen Gigi Pasien)</span>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-main)' }}>
+            {isEn ? 'Odontogram (Select Patient Tooth Elements)' : 'Odontogram (Pilih Elemen Gigi Pasien)'}
+          </span>
           <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 600 }}>
-            {selectedTeeth.length > 0 ? `${selectedTeeth.length} Gigi Terpilih: ${selectedTeeth.join(', ')}` : 'Belum ada gigi dipilih'}
+            {selectedTeeth.length > 0
+              ? isEn
+                ? `${selectedTeeth.length} Teeth Selected: ${selectedTeeth.join(', ')}`
+                : `${selectedTeeth.length} Gigi Terpilih: ${selectedTeeth.join(', ')}`
+              : isEn
+              ? 'No teeth selected'
+              : 'Belum ada gigi dipilih'}
           </span>
         </div>
 
         {/* Rahang Atas (Maxilla) */}
         <div style={{ marginBottom: '12px' }}>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', marginBottom: '6px', fontWeight: 600 }}>
-            RAHANG ATAS (MAXILLA)
+            {isEn ? 'UPPER JAW (MAXILLA)' : 'RAHANG ATAS (MAXILLA)'}
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
             <div style={{ display: 'flex', gap: '4px' }}>{upperRight.map(renderTooth)}</div>
@@ -73,7 +83,7 @@ export const Odontogram: React.FC<OdontogramProps> = ({ selectedTeeth, onChange,
             <div style={{ display: 'flex', gap: '4px' }}>{lowerLeft.map(renderTooth)}</div>
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', fontWeight: 600 }}>
-            RAHANG BAWAH (MANDIBULA)
+            {isEn ? 'LOWER JAW (MANDIBLE)' : 'RAHANG BAWAH (MANDIBULA)'}
           </div>
         </div>
       </div>

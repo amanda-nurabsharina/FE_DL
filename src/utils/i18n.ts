@@ -127,6 +127,11 @@ export const translations = {
     delete: 'Hapus',
     active: 'Aktif',
     inactive: 'Nonaktif',
+    username: 'Username',
+    password: 'Password / Kata Sandi',
+    loginButton: 'Masuk ke Sistem',
+    quickDemoLabel: 'Akses Cepat Demo Akun:',
+    detail: 'Detail',
   },
   en: {
     // Brand & Header
@@ -252,5 +257,10 @@ export const translations = {
     delete: 'Delete',
     active: 'Active',
     inactive: 'Inactive',
+    username: 'Username',
+    password: 'Password',
+    loginButton: 'Sign In to System',
+    quickDemoLabel: 'Quick Demo Access:',
+    detail: 'Detail',
   },
 }
