@@ -2,6 +2,20 @@
 
 const BASE_URL = '/api/v1'
 
+export interface Tenant {
+  id: string
+  code: string
+  name: string
+  address?: string
+  phone?: string
+  email?: string
+  is_active: boolean
+  user_count?: number
+  order_count?: number
+  created_at: string
+  updated_at?: string
+}
+
 export interface Role {
   id: number
   name: string
@@ -11,6 +25,8 @@ export interface Role {
 
 export interface User {
   id: string
+  tenant_id?: string
+  tenant?: Tenant
   employee_code?: string
   username: string
   email: string
@@ -789,8 +805,12 @@ export const api = {
   },
 
   // Users Management & HR
-  async getUsers() {
-    return this.request<User[]>('/users')
+  async getUsers(search = '', tenantId = '') {
+    const params = new URLSearchParams()
+    if (search) params.set('search', search)
+    if (tenantId) params.set('tenant_id', tenantId)
+    const qs = params.toString()
+    return this.request<User[]>(`/users${qs ? `?${qs}` : ''}`)
   },
   async createUser(data: any) {
     return this.request<User>('/users', {
@@ -806,6 +826,35 @@ export const api = {
   },
   async deleteUser(id: string) {
     return this.request(`/users/${id}`, {
+      method: 'DELETE',
+    })
+  },
+
+  // Tenants Management (Multi-Tenant Super Admin)
+  async getTenants(search = '', activeOnly = false) {
+    const params = new URLSearchParams()
+    if (search) params.set('search', search)
+    if (activeOnly) params.set('active_only', 'true')
+    const qs = params.toString()
+    return this.request<Tenant[]>(`/tenants${qs ? `?${qs}` : ''}`)
+  },
+  async getTenant(id: string) {
+    return this.request<Tenant>(`/tenants/${id}`)
+  },
+  async createTenant(data: { code: string; name: string; address?: string; phone?: string; email?: string }) {
+    return this.request<Tenant>('/tenants', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
+  async updateTenant(id: string, data: { name?: string; address?: string; phone?: string; email?: string; is_active?: boolean }) {
+    return this.request<Tenant>(`/tenants/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  },
+  async deleteTenant(id: string) {
+    return this.request(`/tenants/${id}`, {
       method: 'DELETE',
     })
   },
@@ -867,10 +916,24 @@ export const api = {
   async getRoles() {
     return this.request<Role[]>('/roles')
   },
+  async createRole(data: { name: string; description?: string; allowed_menus: string[] | string }) {
+    return this.request<Role>('/roles', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...data,
+        allowed_menus: Array.isArray(data.allowed_menus) ? JSON.stringify(data.allowed_menus) : (data.allowed_menus || '[]'),
+      }),
+    })
+  },
   async updateRole(id: number, allowedMenus: string[]) {
     return this.request(`/roles/${id}`, {
       method: 'PATCH',
       body: JSON.stringify({ allowed_menus: JSON.stringify(allowedMenus) }),
+    })
+  },
+  async deleteRole(id: number) {
+    return this.request(`/roles/${id}`, {
+      method: 'DELETE',
     })
   },
 

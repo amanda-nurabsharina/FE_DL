@@ -3,6 +3,7 @@ import {
   Activity,
   AlertCircle,
   Bell,
+  Building2,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
@@ -50,6 +51,7 @@ import {
   type StaffAttendance,
   type StockMovement,
   type Supplier,
+  type Tenant,
   type UnitOfMeasure,
   type User,
 } from './api'
@@ -113,7 +115,7 @@ export function App() {
   const [usersList, setUsersList] = useState<User[]>([])
   const [rolesList, setRolesList] = useState<Role[]>([])
   const [systemSettings, setSystemSettings] = useState<Record<string, string>>({})
-  const [settingsSubTab, setSettingsSubTab] = useState<'users' | 'roles' | 'security_logs' | 'backup' | 'appearance'>('users')
+  const [settingsSubTab, setSettingsSubTab] = useState<'users' | 'roles' | 'tenants' | 'security_logs' | 'backup' | 'appearance'>('users')
 
   // Dashboard Analytics, Auto Alerts, Mobile Quick Update, Backup & Security Audit Log State
   const [dashChartMode, setDashChartMode] = useState<'weekly' | 'monthly'>('weekly')
@@ -134,6 +136,31 @@ export function App() {
   const [logoPreview, setLogoPreview] = useState<string>('')
   const [uploadingLogo, setUploadingLogo] = useState(false)
 
+  // Multi-Tenant Architecture State (Super Admin)
+  const [tenantsList, setTenantsList] = useState<Tenant[]>([])
+  const [selectedTenantFilter, setSelectedTenantFilter] = useState<string>('')
+  const [tenantSearchQuery, setTenantSearchQuery] = useState('')
+  const [showAddTenantModal, setShowAddTenantModal] = useState(false)
+  const [newTenantCode, setNewTenantCode] = useState('')
+  const [newTenantName, setNewTenantName] = useState('')
+  const [newTenantAddress, setNewTenantAddress] = useState('')
+  const [newTenantPhone, setNewTenantPhone] = useState('')
+  const [newTenantEmail, setNewTenantEmail] = useState('')
+
+  // Edit Tenant State
+  const [editingTenant, setEditingTenant] = useState<Tenant | null>(null)
+  const [editTenantName, setEditTenantName] = useState('')
+  const [editTenantAddress, setEditTenantAddress] = useState('')
+  const [editTenantPhone, setEditTenantPhone] = useState('')
+  const [editTenantEmail, setEditTenantEmail] = useState('')
+  const [editTenantActive, setEditTenantActive] = useState(true)
+
+  // Add Role State (Super Admin)
+  const [showAddRoleModal, setShowAddRoleModal] = useState(false)
+  const [newRoleName, setNewRoleName] = useState('')
+  const [newRoleDesc, setNewRoleDesc] = useState('')
+  const [newRoleMenus, setNewRoleMenus] = useState<string[]>([])
+
   // Add User Form State
   const [showAddUserModal, setShowAddUserModal] = useState(false)
   const [newUsername, setNewUsername] = useState('')
@@ -142,6 +169,7 @@ export function App() {
   const [newEmail, setNewEmail] = useState('')
   const [newPhone, setNewPhone] = useState('')
   const [newRoleID, setNewRoleID] = useState(2)
+  const [newUserTenantID, setNewUserTenantID] = useState<string>('')
 
   // Role Menus Editing State (Map of roleId -> array of menu keys)
   const [roleMenuMap, setRoleMenuMap] = useState<Record<number, string[]>>({})
@@ -409,7 +437,7 @@ export function App() {
   const loadInitialData = React.useCallback(async () => {
     try {
       setLoading(true)
-      const [meData, dashData, ordersData, custData, patsData, typesData, itemsData, prData, invData, expData, usersData, rolesData, settingsData, unitsData, supsData, batchesData, movesData, invReportData, attData, finSumData, expCatData, backupData, actLogData] = await Promise.all([
+      const [meData, dashData, ordersData, custData, patsData, typesData, itemsData, prData, invData, expData, usersData, rolesData, settingsData, unitsData, supsData, batchesData, movesData, invReportData, attData, finSumData, expCatData, backupData, actLogData, tenantsData] = await Promise.all([
         api.getMe().catch(() => null),
         api.getDashboard().catch(() => null),
         api.getOrders().catch(() => []),
@@ -433,6 +461,7 @@ export function App() {
         api.getExpenseCategories().catch(() => []),
         api.getBackupInfo().catch(() => null),
         api.getActivityLogs().catch(() => null),
+        api.getTenants().catch(() => []),
       ])
       if (meData) {
         api.setUser(meData)
@@ -460,6 +489,10 @@ export function App() {
       setExpenseCategories(expCatData || [])
       if (backupData) setBackupInfo(backupData)
       if (actLogData) setActivitySummary(actLogData)
+      setTenantsList(tenantsData || [])
+      if (tenantsData && tenantsData.length > 0) {
+        setNewUserTenantID((prev) => prev || tenantsData[0].id)
+      }
 
       // Initialize roleMenuMap
       if (rolesData) {
@@ -1217,6 +1250,10 @@ export function App() {
       alert(lang === 'id' ? 'Username, password, dan nama lengkap wajib diisi' : 'Username, password, and full name are required')
       return
     }
+    if (!newUserTenantID) {
+      alert(lang === 'id' ? 'Tenant / Lab wajib dipilih' : 'Tenant / Lab is required')
+      return
+    }
     try {
       setLoading(true)
       await api.createUser({
@@ -1226,6 +1263,7 @@ export function App() {
         email: newEmail,
         phone: newPhone,
         role_id: Number(newRoleID),
+        tenant_id: newUserTenantID,
       })
       alert(lang === 'id' ? 'User baru berhasil dibuat!' : 'User created successfully!')
       setShowAddUserModal(false)
@@ -1235,6 +1273,109 @@ export function App() {
       await loadInitialData()
     } catch (err: any) {
       alert(err.message || 'Gagal membuat user')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Multi-Tenant: Setup New Tenant
+  const handleCreateTenant = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newTenantCode.trim() || !newTenantName.trim()) {
+      alert(lang === 'id' ? 'Kode dan nama tenant wajib diisi' : 'Tenant code and name are required')
+      return
+    }
+    try {
+      setLoading(true)
+      await api.createTenant({
+        code: newTenantCode.trim().toLowerCase(),
+        name: newTenantName.trim(),
+        address: newTenantAddress.trim(),
+        phone: newTenantPhone.trim(),
+        email: newTenantEmail.trim(),
+      })
+      alert(lang === 'id' ? 'Tenant baru berhasil dibuat!' : 'New tenant successfully created!')
+      setShowAddTenantModal(false)
+      setNewTenantCode('')
+      setNewTenantName('')
+      setNewTenantAddress('')
+      setNewTenantPhone('')
+      setNewTenantEmail('')
+      await loadInitialData()
+    } catch (err: any) {
+      alert(err.message || 'Gagal membuat tenant')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Multi-Tenant: Update Tenant (Edit Name, Address, Contact, Status)
+  const handleUpdateTenant = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingTenant || !editTenantName.trim()) {
+      alert(lang === 'id' ? 'Nama tenant wajib diisi' : 'Tenant name is required')
+      return
+    }
+    try {
+      setLoading(true)
+      await api.updateTenant(editingTenant.id, {
+        name: editTenantName.trim(),
+        address: editTenantAddress.trim(),
+        phone: editTenantPhone.trim(),
+        email: editTenantEmail.trim(),
+        is_active: editTenantActive,
+      })
+      alert(lang === 'id' ? 'Data tenant berhasil diperbarui!' : 'Tenant details successfully updated!')
+      setEditingTenant(null)
+      await loadInitialData()
+    } catch (err: any) {
+      alert(err.message || 'Gagal memperbarui tenant')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Multi-Tenant: Delete Tenant
+  const handleDeleteTenant = async (tenant: Tenant) => {
+    if (tenant.code === 'main') {
+      alert(lang === 'id' ? 'Tenant utama (main) tidak dapat dihapus.' : 'Main tenant cannot be deleted.')
+      return
+    }
+    if (!confirm(lang === 'id' ? `Yakin ingin menghapus tenant "${tenant.name}"?` : `Are you sure you want to delete tenant "${tenant.name}"?`)) return
+    try {
+      setLoading(true)
+      await api.deleteTenant(tenant.id)
+      alert(lang === 'id' ? 'Tenant berhasil dihapus' : 'Tenant deleted')
+      await loadInitialData()
+    } catch (err: any) {
+      alert(err.message || 'Gagal menghapus tenant')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Role Management: Create New Role (Super Admin Only)
+  const handleCreateRole = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newRoleName.trim()) {
+      alert(lang === 'id' ? 'Nama role wajib diisi' : 'Role name is required')
+      return
+    }
+    try {
+      setLoading(true)
+      await api.createRole({
+        name: newRoleName.trim().toUpperCase(),
+        description: newRoleDesc.trim(),
+        allowed_menus: newRoleMenus,
+      })
+      alert(lang === 'id' ? 'Role baru berhasil dibuat!' : 'New role successfully created!')
+      setShowAddRoleModal(false)
+      setNewRoleName('')
+      setNewRoleDesc('')
+      setNewRoleMenus([])
+      await loadInitialData()
+    } catch (err: any) {
+      alert(err.message || 'Gagal membuat role')
     } finally {
       setLoading(false)
     }
@@ -1867,11 +2008,61 @@ export function App() {
         </div>
       </header>
 
-      {/* Super Admin Notice Bar if active */}
+      {/* Super Admin Notice Bar with Multi-Tenant Switcher */}
       {isSuperAdmin && (
-        <div style={{ background: '#ecfdf5', borderBottom: '1px solid #a7f3d0', color: '#065f46', padding: '8px 20px', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <ShieldCheck size={16} />
-          <span>{t.settingsOnlyNotice}</span>
+        <div style={{ background: '#ecfdf5', borderBottom: '1px solid #a7f3d0', color: '#065f46', padding: '8px 20px', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <ShieldCheck size={16} />
+            <span>{t.settingsOnlyNotice}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: '#047857' }}>
+              🏢 {tr('Context Tenant:', 'Tenant Context:')}
+            </span>
+            <select
+              value={selectedTenantFilter}
+              onChange={(e) => setSelectedTenantFilter(e.target.value)}
+              style={{
+                background: '#ffffff',
+                border: '1px solid #6ee7b7',
+                borderRadius: '6px',
+                padding: '4px 8px',
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#065f46',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="">{tr('🌐 Semua Tenant (Global Multi-Tenant)', '🌐 All Tenants (Global Multi-Tenant)')}</option>
+              {tenantsList.map((tn) => (
+                <option key={tn.id} value={tn.id}>
+                  🏢 {tn.name} ({tn.code})
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => {
+                setActiveTab('settings')
+                setSettingsSubTab('tenants')
+              }}
+              style={{
+                background: '#059669',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '4px 10px',
+                fontSize: '12px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              <Building2 size={13} />
+              <span>{tr('Setup Tenant', 'Setup Tenant')}</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -2704,6 +2895,9 @@ export function App() {
               {/* Sub-tabs Navigation */}
               <div className="tabs-scroll-container" style={{ borderBottom: '1px solid var(--border-light)', marginBottom: '24px' }}>
                 {[
+                  ...(isSuperAdmin
+                    ? [{ id: 'tenants', label: `🏢 ${t.tabTenants} (${tenantsList.length})`, icon: Building2 }]
+                    : []),
                   { id: 'users', label: t.tabUsers, icon: Users },
                   { id: 'roles', label: t.tabRoles, icon: ShieldCheck },
                   { id: 'security_logs', label: `🛡️ ${tr('Modul Keamanan & Log Aktivitas', 'Security & Activity Audit Logs')} (${activitySummary?.total_logs || 0})`, icon: Activity },
@@ -2736,6 +2930,207 @@ export function App() {
                 })}
               </div>
 
+              {/* SETTINGS SUB-TAB: MULTI-TENANT SETUP (SUPER ADMIN ONLY) */}
+              {settingsSubTab === 'tenants' && isSuperAdmin && (
+                <div className="animate-fade-in">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Building2 size={20} color="var(--primary)" />
+                        <span>{tr('Setup & Manajemen Multi-Tenant Lab', 'Lab Multi-Tenant Setup & Management')}</span>
+                      </h3>
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                        {tr(
+                          'Kelola isolasi data multi-tenant lab. Semua pengguna, SPK, dokter, dan keuangan terisolasi per tenant. Hanya Role yang bersifat global.',
+                          'Manage multi-tenant lab data isolation. All users, orders, dentists, and finances are scoped per tenant. Only roles are global.'
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setNewTenantCode('')
+                        setNewTenantName('')
+                        setNewTenantAddress('')
+                        setNewTenantPhone('')
+                        setNewTenantEmail('')
+                        setShowAddTenantModal(true)
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        background: 'var(--primary)',
+                        color: '#ffffff',
+                        padding: '10px 18px',
+                        borderRadius: '10px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        boxShadow: '0 2px 8px rgba(2, 132, 199, 0.25)',
+                      }}
+                    >
+                      <Plus size={16} />
+                      <span>{t.addTenantBtn}</span>
+                    </button>
+                  </div>
+
+                  {/* KPI Cards */}
+                  <div className="grid-4col" style={{ gap: '14px', marginBottom: '24px' }}>
+                    <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>{tr('Total Tenant Terdaftar', 'Total Registered Tenants')}</div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>{tenantsList.length}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--primary)', marginTop: '2px' }}>{tr('Pusat & Cabang Lab', 'Main Lab & Branches')}</div>
+                    </div>
+                    <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>{tr('Tenant Berstatus Aktif', 'Active Tenants')}</div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: '#10b981', marginTop: '4px' }}>
+                        {tenantsList.filter((tn) => tn.is_active).length}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{tr('Operasional Berjalan', 'Operational')}</div>
+                    </div>
+                    <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>{tr('Total User Lintas Tenant', 'Total Users Across Tenants')}</div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-main)', marginTop: '4px' }}>{usersList.length}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{tr('Diisolasi per Tenant', 'Isolated per Tenant')}</div>
+                    </div>
+                    <div style={{ background: 'var(--bg-card)', padding: '16px', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>{tr('Total Role Global', 'Total Global Roles')}</div>
+                      <div style={{ fontSize: '24px', fontWeight: 800, color: '#8b5cf6', marginTop: '4px' }}>{rolesList.length}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{tr('Dapat Dipakai Semua Tenant', 'Shared by All Tenants')}</div>
+                    </div>
+                  </div>
+
+                  {/* Tenant List Table */}
+                  <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ position: 'relative', width: '300px', maxWidth: '100%' }}>
+                        <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-subtle)' }} />
+                        <input
+                          type="text"
+                          placeholder={tr('Cari kode, nama, atau kota tenant...', 'Search tenant code, name, or city...')}
+                          value={tenantSearchQuery}
+                          onChange={(e) => setTenantSearchQuery(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '8px 12px 8px 34px',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border-light)',
+                            fontSize: '13px',
+                            background: 'var(--bg-surface)',
+                            color: 'var(--text-main)',
+                          }}
+                        />
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {tr('Menampilkan', 'Showing')} {tenantsList.filter((tn) => !tenantSearchQuery || tn.name.toLowerCase().includes(tenantSearchQuery.toLowerCase()) || tn.code.toLowerCase().includes(tenantSearchQuery.toLowerCase())).length} tenant
+                      </div>
+                    </div>
+
+                    <div className="table-responsive">
+                      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                            <th style={{ padding: '12px' }}>{t.tenantCode}</th>
+                            <th style={{ padding: '12px' }}>{t.tenantName}</th>
+                            <th style={{ padding: '12px' }}>{t.tenantAddress}</th>
+                            <th style={{ padding: '12px' }}>{t.tenantPhone}</th>
+                            <th style={{ padding: '12px' }}>{tr('Pengguna', 'Users')}</th>
+                            <th style={{ padding: '12px' }}>Status</th>
+                            <th style={{ padding: '12px' }}>{t.colActions}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tenantsList
+                            .filter((tn) => !tenantSearchQuery || tn.name.toLowerCase().includes(tenantSearchQuery.toLowerCase()) || tn.code.toLowerCase().includes(tenantSearchQuery.toLowerCase()))
+                            .map((tn) => (
+                              <tr key={tn.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
+                                <td style={{ padding: '12px' }}>
+                                  <span style={{ fontFamily: 'monospace', padding: '3px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tn.code === 'main' ? '#dbeafe' : 'var(--bg-surface)', color: tn.code === 'main' ? '#1e40af' : 'var(--text-main)', border: '1px solid var(--border-light)' }}>
+                                    {tn.code}
+                                  </span>
+                                  {tn.code === 'main' && (
+                                    <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: '#fef3c7', color: '#92400e' }}>
+                                      PUSAT
+                                    </span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                  <div>{tn.name}</div>
+                                  {tn.email && <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>{tn.email}</div>}
+                                </td>
+                                <td style={{ padding: '12px', color: 'var(--text-muted)', maxWidth: '200px' }}>{tn.address || '-'}</td>
+                                <td style={{ padding: '12px', color: 'var(--text-muted)' }}>{tn.phone || '-'}</td>
+                                <td style={{ padding: '12px' }}>
+                                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--primary)', background: 'var(--primary-subtle)', padding: '2px 8px', borderRadius: '999px' }}>
+                                    {usersList.filter((u) => u.tenant_id === tn.id).length} {tr('User', 'Users')}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '12px' }}>
+                                  <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: tn.is_active ? '#ecfdf5' : '#fee2e2', color: tn.is_active ? '#059669' : '#dc2626' }}>
+                                    {tn.is_active ? t.active : t.inactive}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '12px', whiteSpace: 'nowrap' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'nowrap' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingTenant(tn)
+                                        setEditTenantName(tn.name)
+                                        setEditTenantAddress(tn.address || '')
+                                        setEditTenantPhone(tn.phone || '')
+                                        setEditTenantEmail(tn.email || '')
+                                        setEditTenantActive(tn.is_active)
+                                      }}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                        padding: '6px 12px',
+                                        borderRadius: '8px',
+                                        fontSize: '12px',
+                                        fontWeight: 700,
+                                        background: 'var(--primary-subtle)',
+                                        color: 'var(--primary)',
+                                        border: '1px solid var(--primary-light)',
+                                        cursor: 'pointer',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      ✏️ {tr('Edit Data', 'Edit Details')}
+                                    </button>
+                                    {tn.code !== 'main' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteTenant(tn)}
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: '6px 12px',
+                                          borderRadius: '8px',
+                                          fontSize: '12px',
+                                          fontWeight: 600,
+                                          background: '#fee2e2',
+                                          color: '#dc2626',
+                                          border: '1px solid #fecaca',
+                                          cursor: 'pointer',
+                                          whiteSpace: 'nowrap',
+                                        }}
+                                      >
+                                        🗑️ {t.delete}
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* SETTINGS SUB-TAB 1: USER MANAGEMENT */}
               {settingsSubTab === 'users' && (
                 <div className="animate-fade-in">
@@ -2743,15 +3138,38 @@ export function App() {
                     <div>
                       <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>{t.tabUsers}</h3>
                       <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                        {tr('Kelola data akun pengguna, role, dan hak login sistem.', 'Manage user accounts, roles, and system login privileges.')}
+                        {tr('Kelola data akun pengguna, role, dan hak login sistem yang diassign per tenant.', 'Manage user accounts, roles, and login privileges assigned per tenant.')}
                       </p>
                     </div>
-                    <button
-                      onClick={() => setShowAddUserModal(true)}
-                      style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--primary)', color: '#ffffff', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 600 }}
-                    >
-                      <UserPlus size={16} /> {t.addUserBtn}
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      {isSuperAdmin && (
+                        <select
+                          value={selectedTenantFilter}
+                          onChange={(e) => setSelectedTenantFilter(e.target.value)}
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border-light)',
+                            fontSize: '13px',
+                            background: 'var(--bg-card)',
+                            color: 'var(--text-main)',
+                          }}
+                        >
+                          <option value="">{tr('Semua Tenant', 'All Tenants')}</option>
+                          {tenantsList.map((tn) => (
+                            <option key={tn.id} value={tn.id}>
+                              {tn.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <button
+                        onClick={() => setShowAddUserModal(true)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--primary)', color: '#ffffff', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 600 }}
+                      >
+                        <UserPlus size={16} /> {t.addUserBtn}
+                      </button>
+                    </div>
                   </div>
 
                   <div style={{ background: 'var(--bg-card)', borderRadius: '16px', border: '1px solid var(--border-light)', padding: '20px', boxShadow: 'var(--shadow-sm)' }}>
@@ -2761,6 +3179,7 @@ export function App() {
                           <tr style={{ borderBottom: '1.5px solid var(--border-light)', color: 'var(--text-muted)' }}>
                             <th style={{ padding: '12px' }}>Username</th>
                             <th style={{ padding: '12px' }}>{tr('Nama Lengkap', 'Full Name')}</th>
+                            <th style={{ padding: '12px' }}>{t.tenantLabel}</th>
                             <th style={{ padding: '12px' }}>Email</th>
                             <th style={{ padding: '12px' }}>Role</th>
                             <th style={{ padding: '12px' }}>Status</th>
@@ -2768,10 +3187,17 @@ export function App() {
                           </tr>
                         </thead>
                         <tbody>
-                          {usersList.map((u) => (
+                          {usersList
+                            .filter((u) => !selectedTenantFilter || u.tenant_id === selectedTenantFilter)
+                            .map((u) => (
                             <tr key={u.id} style={{ borderBottom: '1px solid var(--border-light)' }}>
                               <td style={{ padding: '12px', fontWeight: 700, color: 'var(--primary)' }}>{u.username}</td>
                               <td style={{ padding: '12px', fontWeight: 600, color: 'var(--text-main)' }}>{u.full_name}</td>
+                              <td style={{ padding: '12px' }}>
+                                <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: 'var(--bg-surface)', border: '1px solid var(--border-light)', color: 'var(--text-main)' }}>
+                                  🏢 {u.tenant?.name || (tenantsList.find((tn) => tn.id === u.tenant_id)?.name) || 'Main Dental Lab'}
+                                </span>
+                              </td>
                               <td style={{ padding: '12px', color: 'var(--text-muted)' }}>{u.email || '-'}</td>
                               <td style={{ padding: '12px' }}>
                                 <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: u.role?.name === 'SUPER_ADMIN' ? '#dcfce7' : 'var(--primary-light)', color: u.role?.name === 'SUPER_ADMIN' ? '#166534' : 'var(--primary)' }}>
@@ -2813,11 +3239,26 @@ export function App() {
               {/* SETTINGS SUB-TAB 2: ROLE MANAGEMENT (MENU PERMISSIONS) */}
               {settingsSubTab === 'roles' && (
                 <div className="animate-fade-in">
-                  <div style={{ marginBottom: '16px' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>{t.tabRoles}</h3>
-                    <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-                      {tr('Atur menu yang dapat diakses oleh masing-masing role pengguna.', 'Manage menus accessible by each user role.')}
-                    </p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+                    <div>
+                      <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>{t.tabRoles}</h3>
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                        {tr('Atur menu yang dapat diakses oleh masing-masing role pengguna. Role bersifat global lintas seluruh tenant.', 'Manage menus accessible by each user role. Roles are globally shared across all tenants.')}
+                      </p>
+                    </div>
+                    {isSuperAdmin && (
+                      <button
+                        onClick={() => {
+                          setNewRoleName('')
+                          setNewRoleDesc('')
+                          setNewRoleMenus(['dashboard', 'orders'])
+                          setShowAddRoleModal(true)
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--primary)', color: '#ffffff', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: 600 }}
+                      >
+                        <Plus size={16} /> {t.addRoleBtn}
+                      </button>
+                    )}
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -8634,6 +9075,25 @@ export function App() {
               </div>
 
               <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {tr('Tenant / Cabang Lab *', 'Tenant / Lab Branch *')}
+                </label>
+                <select
+                  value={newUserTenantID}
+                  onChange={(e) => setNewUserTenantID(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                >
+                  <option value="">{tr('-- Pilih Tenant / Lab --', '-- Select Tenant / Lab --')}</option>
+                  {tenantsList.map((tn) => (
+                    <option key={tn.id} value={tn.id}>
+                      🏢 {tn.name} ({tn.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ marginBottom: '12px' }}>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>Role Akun *</label>
                 <select
                   value={newRoleID}
@@ -8671,6 +9131,277 @@ export function App() {
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                 <button type="button" onClick={() => setShowAddUserModal(false)} style={{ padding: '8px 16px', background: 'var(--bg-surface)', borderRadius: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                  {t.cancelBtn}
+                </button>
+                <button type="submit" style={{ padding: '8px 20px', background: 'var(--primary)', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Add Tenant (Super Admin Only) */}
+      {showAddTenantModal && isSuperAdmin && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Building2 size={20} color="var(--primary)" />
+              <span>{t.addTenantBtn}</span>
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              {tr('Buat tenant / cabang baru. Data pesanan, user, stok & keuangan akan diisolasi mandiri.', 'Create a new tenant / branch. Orders, users, stock & finances will be strictly isolated.')}
+            </p>
+            <form onSubmit={handleCreateTenant}>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {tr('Kode Tenant (Unik, huruf kecil tanpa spasi) *', 'Tenant Code (Unique, lowercase without spaces) *')}
+                </label>
+                <input
+                  type="text"
+                  placeholder="cth: surabaya, medan, cabang-02"
+                  value={newTenantCode}
+                  onChange={(e) => setNewTenantCode(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
+                  required
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)', fontFamily: 'monospace' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {tr('Nama Tenant / Cabang Lab *', 'Tenant / Branch Lab Name *')}
+                </label>
+                <input
+                  type="text"
+                  placeholder="cth: Dental Lab Mandiri Cabang Surabaya"
+                  value={newTenantName}
+                  onChange={(e) => setNewTenantName(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {t.tenantAddress}
+                </label>
+                <input
+                  type="text"
+                  placeholder="cth: Jl. Pemuda No. 45, Surabaya"
+                  value={newTenantAddress}
+                  onChange={(e) => setNewTenantAddress(e.target.value)}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                />
+              </div>
+
+              <div className="grid-2col" style={{ gap: '10px', marginBottom: '20px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                    {t.tenantPhone}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="08123456789"
+                    value={newTenantPhone}
+                    onChange={(e) => setNewTenantPhone(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                    {t.tenantEmail}
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="lab.sby@dentallab.com"
+                    value={newTenantEmail}
+                    onChange={(e) => setNewTenantEmail(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowAddTenantModal(false)}
+                  style={{ padding: '8px 16px', background: 'var(--bg-surface)', borderRadius: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}
+                >
+                  {t.cancelBtn}
+                </button>
+                <button type="submit" style={{ padding: '8px 20px', background: 'var(--primary)', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Edit Tenant (Super Admin Only) */}
+      {editingTenant && isSuperAdmin && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Building2 size={20} color="var(--primary)" />
+              <span>{tr('Edit Informasi Tenant', 'Edit Tenant Information')}</span>
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              {tr(`Ubah nama, kontak atau status operasional tenant "${editingTenant.code}".`, `Update name, contact or operational status of tenant "${editingTenant.code}".`)}
+            </p>
+            <form onSubmit={handleUpdateTenant}>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {t.tenantName} *
+                </label>
+                <input
+                  type="text"
+                  value={editTenantName}
+                  onChange={(e) => setEditTenantName(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {t.tenantAddress}
+                </label>
+                <input
+                  type="text"
+                  value={editTenantAddress}
+                  onChange={(e) => setEditTenantAddress(e.target.value)}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                />
+              </div>
+
+              <div className="grid-2col" style={{ gap: '10px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                    {t.tenantPhone}
+                  </label>
+                  <input
+                    type="text"
+                    value={editTenantPhone}
+                    onChange={(e) => setEditTenantPhone(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                    {t.tenantEmail}
+                  </label>
+                  <input
+                    type="email"
+                    value={editTenantEmail}
+                    onChange={(e) => setEditTenantEmail(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)' }}>
+                  <input
+                    type="checkbox"
+                    checked={editTenantActive}
+                    onChange={(e) => setEditTenantActive(e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <span>{tr('Status Tenant Aktif (Bisa Login & Transaksi)', 'Active Tenant Status (Can Login & Transact)')}</span>
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setEditingTenant(null)}
+                  style={{ padding: '8px 16px', background: 'var(--bg-surface)', borderRadius: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}
+                >
+                  {t.cancelBtn}
+                </button>
+                <button type="submit" style={{ padding: '8px 20px', background: 'var(--primary)', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Add Role (Super Admin Only) */}
+      {showAddRoleModal && isSuperAdmin && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '520px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ShieldCheck size={20} color="var(--primary)" />
+              <span>{t.addRoleBtn}</span>
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+              {tr('Role dibuat di Super Admin page dan bersifat global untuk seluruh tenant.', 'Roles are created on Super Admin page and shared globally across all tenants.')}
+            </p>
+            <form onSubmit={handleCreateRole}>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {t.roleName} *
+                </label>
+                <input
+                  type="text"
+                  placeholder="cth: MARKETING, SUPERVISOR, COURIER"
+                  value={newRoleName}
+                  onChange={(e) => setNewRoleName(e.target.value.toUpperCase().replace(/\s+/g, '_'))}
+                  required
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)', fontFamily: 'monospace' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+                  {t.roleDesc}
+                </label>
+                <input
+                  type="text"
+                  placeholder="cth: Akses operasional lapangan dan monitoring pesanan"
+                  value={newRoleDesc}
+                  onChange={(e) => setNewRoleDesc(e.target.value)}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '13px', background: 'var(--bg-card)', color: 'var(--text-main)' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
+                  {tr('Pilih Akses Menu Awal:', 'Select Initial Menu Access:')}
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px', maxHeight: '180px', overflowY: 'auto', padding: '10px', background: 'var(--bg-surface)', borderRadius: '8px', border: '1px solid var(--border-light)' }}>
+                  {allSystemMenus.map((menu) => {
+                    const checked = newRoleMenus.includes(menu.key)
+                    return (
+                      <label key={menu.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            if (checked) {
+                              setNewRoleMenus(newRoleMenus.filter((k) => k !== menu.key))
+                            } else {
+                              setNewRoleMenus([...newRoleMenus, menu.key])
+                            }
+                          }}
+                        />
+                        <span>{menu.label}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowAddRoleModal(false)}
+                  style={{ padding: '8px 16px', background: 'var(--bg-surface)', borderRadius: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}
+                >
                   {t.cancelBtn}
                 </button>
                 <button type="submit" style={{ padding: '8px 20px', background: 'var(--primary)', color: '#ffffff', borderRadius: '8px', fontSize: '13px', fontWeight: 700 }}>
